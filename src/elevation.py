@@ -27,8 +27,8 @@ GYRO_CONFIG = 0x1B
 INT_ENABLE = 0x38
 
 # high in first position, low in second position
-ACC_REGISTERS = [[0x23, 0x22], [0x25, 0x24], [0x27, 0x26]]
-GYRO_REGISTERS = [[0x29, 0x28], [0x2B, 0x2A], [0x2D, 0x2C]]
+ACC_REGISTERS = [[0x3B, 0x3C], [0x3D, 0x3E], [0x3F, 0x40]]
+GYRO_REGISTERS = [[0x43, 0x44], [0x45, 0x46], [0x47, 0x48]]
 
 ACC_BIAS = [[6.07401519e-05, -7.99851022e-02],
             [6.08876489e-05, -7.61055061e-03],
@@ -43,7 +43,7 @@ GYRO_BIAS = [-8099.33333333, -8212.66666667, -5927.33333333]
 # GYRO_CONFIG - set gyro to ± 2000º/s (3)
 # INT_ENABLE - enable Data Ready interrupt, occurs when write op to all of the sensor registers is completed
 
-setup = [[SMPLRT_DIV, 7], [PWR_MGMT_1, 1], [CONFIG, int('0000110', 2)], [GYRO_CONFIG, 24], [INT_ENABLE, 1]]
+setup = [[SMPLRT_DIV, 7], [PWR_MGMT_1, 1], [CONFIG, 0b0000110], [GYRO_CONFIG, 24], [INT_ENABLE, 1]]
 
 # setup = [[CTRL1_XL, 0b01010000], [CTRL2_G, 0b01010000]]
 
