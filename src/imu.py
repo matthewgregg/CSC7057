@@ -16,18 +16,18 @@ class IMU(object):
     y = 0
     z = 0
 
-    def __init__(self, acc_device_address, gyro_scale, accel_add, gyro_add, mag_device_address=None, mag_add=None, accel_bias=None, gyro_bias=None,
-                 *args: list[int, int]):
+    def __init__(self, device_address, gyro_scale, accel_add, gyro_add, mag_add=None, accel_bias=None, gyro_bias=None,
+                 mag_bias=None, *args: list[int, int]):
         """
         Initialise IMU
-        :param acc_device_address: the accelerometer and gyroscope bus address
+        :param device_address: the accelerometer and gyroscope bus address
         :param gyro_scale: the factor to scale gyroscope data by (from datasheet)
         :param accel_add: the accelerometer's addresses
         :param gyro_add: the gyroscope's addresses
-        :param mag_device_address: the magnetometer's device address
         :param mag_add: the magnetometer's addresses
         :param accel_bias: the accelerometer's bias
         :param gyro_bias: the gyroscope's bias
+        :param mag_bias: the magnetometer bias
         :param args: miscellaneous addresses and values to be written
         """
         if accel_bias is None:
@@ -36,17 +36,22 @@ class IMU(object):
         if gyro_bias is None:
             gyro_bias = [0, 0, 0]
 
-        self.acc_gyro_device_address = acc_device_address
+        if device_address is list:
+            self.acc_gyro_device_address = device_address[0]
+            self.mag_device_address = device_address[1]
+        else:
+            self.acc_gyro_device_address = device_address
+
         self.accel_add = accel_add
         self.gyro_add = gyro_add
-        self.mag_device_address = mag_device_address
         self.mag_add = mag_add
         self.accel_bias = accel_bias
         self.gyro_bias = gyro_bias
         self.gyro_scale = gyro_scale
+        self.mag_bias = mag_bias
 
         for value in args:
-            self.BUS.write_byte_data(acc_device_address, value[0], value[1])
+            self.BUS.write_byte_data(value[0], value[1], value[2])
 
         print(self.__read_sensor_data(accel_add[0]))
 
@@ -54,9 +59,11 @@ class IMU(object):
         """
         Write data to an address on the bus
         """
-        high = self.BUS.read_byte_data(self.acc_gyro_device_address, addr[0])
-        low = self.BUS.read_byte_data(self.acc_gyro_device_address, addr[1])
+        low = self.BUS.read_byte_data(self.acc_gyro_device_address, addr[0])
+        high = self.BUS.read_byte_data(self.acc_gyro_device_address, addr[1])
+        # bitwise left shift high by 8 bits, then bitwise or on shifted high and low
         value = (high << 8 | low)
+        # wrap around overflow
         if value > 2 ** 16 / 2:
             value = value - 2 ** 16
         return value
@@ -66,6 +73,7 @@ class IMU(object):
         Returns yaw value adjusted for declination based on GPS data.
         Will only return a value if magnetometer readings and available
         """
+        # TODO revert this when not testing
         # lat, long = gps.get_coordinates()
         lat = 54.5
         long = -6
@@ -229,7 +237,7 @@ class IMU(object):
             bias += [g_x, g_y, g_z]
             time.sleep(0.02)
 
-        return (bias / len(bias)).toList()
+        return bias / len(bias)
 
     def calibrate_accelerometer(self) -> list[list[float, float], list[float, float], list[float, float]]:
         """
@@ -254,13 +262,48 @@ class IMU(object):
                 data[direction_index] = np.array(axis_data)
 
             x_data = data[0] + data[1] + data[2]
-            y_data = sum(axis_coefficients * np.ones(np.shape(data)))
-            # y_data = 1 * np.ones(np.shape(data[0])) + -1 * np.ones(np.shape(data[1])) + 0 * np.ones(np.shape(data[2]))
+            # y_data = sum(axis_coefficients * np.ones(np.shape(data)))
+            y_data = 1 * np.ones(np.shape(data[0])) + -1 * np.ones(np.shape(data[1])) + 0 * np.ones(np.shape(data[2]))
 
             fit_params, _ = curve_fit(self.__fit_acc_bias, x_data, y_data, maxfev=10000)
             bias[axis_index] = fit_params
         print('Accelerometer Calibrated')
         return bias
+
+    def accel_cal(self):
+        print("-"*50)
+        print("Accelerometer Calibration")
+        mpu_offsets = [[],[],[]] # offset array to be printed
+        axis_vec = ['z','y','x'] # axis labels
+        cal_directions = ["upward","downward","perpendicular to gravity"] # direction for IMU cal
+        cal_indices = [2,1,0] # axis indices
+        for qq,ax_qq in enumerate(axis_vec):
+            ax_offsets = [[],[],[]]
+            print("-"*50)
+            for direc_ii,direc in enumerate(cal_directions):
+                input("-"*8+" Press Enter and Keep IMU Steady to Calibrate the Accelerometer with the -"+ \
+                      ax_qq+"-axis pointed "+direc)
+                mpu_array = []
+                while len(mpu_array)<1000:
+                    try:
+                        ax = self.__read_sensor_data(self.accel_add[0])
+                        ay = self.__read_sensor_data(self.accel_add[1])
+                        az = self.__read_sensor_data(self.accel_add[2])
+                        mpu_array.append([ax,ay,az]) # append to array
+                    except:
+                        continue
+                ax_offsets[direc_ii] = np.array(mpu_array)[:,cal_indices[qq]] # offsets for direction
+
+            # Use three calibrations (+1g, -1g, 0g) for linear fit
+            popts,_ = curve_fit(self.__fit_acc_bias,np.append(np.append(ax_offsets[0],
+                                                              ax_offsets[1]),ax_offsets[2]),
+                                np.append(np.append(1.0*np.ones(np.shape(ax_offsets[0])),
+                                                    -1.0*np.ones(np.shape(ax_offsets[1]))),
+                                          0.0*np.ones(np.shape(ax_offsets[2]))),
+                                maxfev=10000)
+            mpu_offsets[cal_indices[qq]] = popts # place slope and intercept in offset array
+        print('Accelerometer Calibrations Complete')
+        return mpu_offsets
 
     def calibrate_magnetometer_approximate(self) -> list[list[float, float],
                                                          list[float, float],
