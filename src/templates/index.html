@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+   {% if redirect %}
+   <head>
+      <meta http-equiv="refresh" content="0; url='/'" />
+   </head>
+   <body>
+      <p>Please follow <a href="/">this link</a>.</p>
+   </body>
+   {% else %}
+   <head>
+      <title>NOAA</title>
+   </head>
+   <style>
+     img {
+         display: block;
+         margin-left: auto;
+         margin-right: auto;
+         margin: auto;
+         width: 100vh;
+         max-width: 100vw;
+         min-width: 500px;
+     }
+   </style>
+   <body>
+   {% if running == 0 %}
+     <button style="font-size : 20px; width: 100%; height: 100px;">
+        <a href="/running" class="button">START</a>
+     </button>
+   {% else %}
+      <button style="font-size : 20px; width: 100%; height: 100px;">
+         <a href="/" class="button">STOP</a>
+      </button>
+      <p id="time">&#8203;</p>
+      {% if sdrerror %}
+      <p>RTL-SDR not connected. Please connect and restart</p>
+      {% endif %}
+      <img id='image' src="/media/placeholder.png">
+   {% endif %}
+   </body>
+   {% if running == 1 and not sdrerror %}
+   <script>
+      var interval;
+      var rise = new Date("{{ rise }}").getTime();
+      timer = setInterval(function() {
+        interval = rise - new Date().getTime();
+
+        var hours = Math.floor((interval) / (1000 * 60 * 60));
+        var minutes = Math.floor((interval % (1000 * 60 * 60)) / (1000 * 60));
+        var seconds = Math.floor((interval % (1000 * 60)) / 1000);
+
+        document.getElementById("time").innerHTML = "Next pass is {{ satellite }} in " + hours + "h " + minutes + "m " + seconds + "s ";
+
+         if (interval < 0) {
+            clearInterval(timer);
+            var set = new Date("{{ set }}").getTime();
+            timer2 = setInterval(function() {
+              var interval2 = set - new Date().getTime();
+              var hours = Math.floor((interval2) / (1000 * 60 * 60));
+              var minutes = Math.floor((interval2 % (1000 * 60 * 60)) / (1000 * 60));
+              var seconds = Math.floor((interval2 % (1000 * 60)) / 1000);
+              document.getElementById("time").innerHTML = "{{ satellite }} passing over for " + hours + "h " + minutes + "m " + seconds + "s ";
+              if (interval2 < 0) {
+                  clearInterval(timer2);
+                  window.location.href = "/";
+              }
+            }, 1000);
+            window.setInterval(function() {
+               document.getElementById("image").src = "/media/image.png?random="+new Date().getTime();
+            }, 5000);
+         }
+      }, 1000);
+      window.onbeforeunload = function() {
+         return interval < 0 ? true : null;
+      };
+   </script>
+   {% endif %}
+   {% endif %}
+</html>

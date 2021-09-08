@@ -1,0 +1,6 @@
+.DS_Store
+/.idea
+/Project.iml
+/venv
+/src/media/test
+/src/__pycache__
