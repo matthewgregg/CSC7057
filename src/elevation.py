@@ -17,15 +17,16 @@ CTRL2_G = 0x11
 CTRL9_XL = 0x18
 
 # low in first position, high in second position
-ACC_REGISTERS = [[0x22, 0x23], [0x24, 0x25], [0x26, 0x27]]
-GYRO_REGISTERS = [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]]
+ACC_REGISTERS = [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]]
+GYRO_REGISTERS = [[0x22, 0x23], [0x24, 0x25], [0x26, 0x27]]
 
-ACC_BIAS = [[-0.00285675, 0.00944442],
-            [-0.00323874, -0.09694955],
-            [-0.00226641, -0.05384152]]
+
+ACC_BIAS = [[ 6.11505507e-05, -3.49673049e-03],
+            [1.00000000e+00, 9.77528185e-16],
+            [1.00000000e+00, 9.77528185e-16]]
 
 GYRO_SCALE = 8.75 / 1000
-GYRO_BIAS = [2558.33333333, -5482.33333333, -4151.33333333]
+GYRO_BIAS = [11.367, -31.793, -24.028]
 
 ##########################################
 
@@ -36,14 +37,14 @@ CTRL_REG4_M = 0x23
 
 XY_OP_MODE_UHIGH = 0x60  # Ultra-High-Performance Mode,  ODR [Hz]: 155, FAST_ODR: 1
 Z_OP_MODE_UHIGH = 0x0C
-D_RATE_0_685 = 0x00  # ODR = 0.625 Hz
+D_RATE_80 = 0x1C  # ODR = 0.625 Hz
 MAG_GAIN_4G = 0x00  # Full scale = +/-4 Gauss, LSB first
 MEAS_CONT = 0x00  # Continuous-Conversion Mode
 
 MAG_REGISTERS = [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]]
 
-MAG_BIAS = [[1.0076664788827325, 0.03085027311558635, 2894.471358004767],
-            [0.030850273115586305, 1.1241429560902958, 100.64453832541044],
+MAG_BIAS = [[1.051173994115047, 0.023163617823031002, 460.15600170384727],
+            [0.02316361782303098, 1.0104848800632054, -1771.4260099481783],
             [0.0, 0.0, 1.0]]
 
 acc_setup = [[CTRL9_XL, 1],
@@ -51,7 +52,7 @@ acc_setup = [[CTRL9_XL, 1],
              [CTRL2_G, 0b01010000]]
 
 mag_setup = [[CTRL_REG1_M, XY_OP_MODE_UHIGH],
-             [CTRL_REG1_M, D_RATE_0_685],
+             [CTRL_REG1_M, D_RATE_80],
              [CTRL_REG2_M, MAG_GAIN_4G],
              [CTRL_REG3_M, MEAS_CONT],
              [CTRL_REG4_M, Z_OP_MODE_UHIGH]]
@@ -60,4 +61,4 @@ mag_setup = [[CTRL_REG1_M, XY_OP_MODE_UHIGH],
 setup = np.column_stack((np.full((len(acc_setup), 1), DEVICE_ADDRESS[0]), acc_setup))
 setup = np.concatenate((setup, np.column_stack((np.full((len(mag_setup), 1), DEVICE_ADDRESS[1]), mag_setup))), axis=0)
 
-elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, None, None, None, *setup)
+elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, ACC_BIAS, GYRO_BIAS, MAG_BIAS, *setup)

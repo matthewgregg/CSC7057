@@ -1,6 +1,6 @@
 import math
-
 import smbus
+import geomag
 
 BUS = smbus.SMBus(1)
 DEVICE_ADDRESS = 0x1C
@@ -51,17 +51,18 @@ MEAS_CONT = 0x00  # Continuous-Conversion Mode
 MEAS_SING = 0x01  # Single-Conversion Mode
 MEAS_POWER_DOWN = 0x03  # Power-Down Mode
 
-mag_bias = [[1.0076664788827325, 0.03085027311558635, 2894.471358004767],
-            [0.030850273115586305, 1.1241429560902958, 100.64453832541044],
-            [0.0, 0.0, 1.0]]
+
+# mag_bias = [[1.0076664788827325, 0.03085027311558635, 2894.471358004767],
+#             [0.030850273115586305, 1.1241429560902958, 100.64453832541044],
+#             [0.0, 0.0, 1.0]]
 
 
 def read_sensor_data(addr) -> float:
     """
-    Write data to an address on the bus
+    Read data from an address on the bus
     """
-    high = BUS.read_byte_data(DEVICE_ADDRESS, addr[0])
-    low = BUS.read_byte_data(DEVICE_ADDRESS, addr[1])
+    low = BUS.read_byte_data(DEVICE_ADDRESS, addr[0])
+    high = BUS.read_byte_data(DEVICE_ADDRESS, addr[1])
     value = high * 256 + low  # (high << 8 | low)
     if value > 2 ** 16 / 2:
         value = value - 2 ** 16
@@ -94,25 +95,47 @@ def apply_calibration(uncal_x, uncal_y) -> tuple[float, float]:
     cal[0][2] -= (approx_bias[0] * cal[0][0] + approx_bias[1] * cal[0][1])
     cal[1][2] -= (approx_bias[0] * cal[1][0] + approx_bias[1] * cal[1][1])
     """
-    cal = [[1.0278762756271655, 0.055201472560838794, 459.17953840615064],
-           [0.05520147256083878, 1.1093116818631081, -2681.608767196106],
-           [1.0, 0.0, 0.0]]
+    approx_bias = [-585.0, 1447.0, -267.0]
+    cal = [[1.051173994115047, 0.023163617823031002, -121.26302986352941],
+           [0.02316361782303098, 1.0104848800632054, -322.80510492319326],
+           [0.0, 0.0, 1.0]]
 
-    cal_x = uncal_x * cal[0][0] + uncal_y * cal[0][1] + cal[0][2]
-    cal_y = uncal_x * cal[1][0] + uncal_y * cal[1][1] + cal[1][2]
+    cal[0][2] -= (approx_bias[0] * cal[0][0] + approx_bias[1] * cal[0][1])
+    cal[1][2] -= (approx_bias[0] * cal[1][0] + approx_bias[1] * cal[1][1])
+
+    cal_x = uncal_x * MAG_BIAS[0][0] + uncal_y * MAG_BIAS[0][1] + MAG_BIAS[0][2]
+    cal_y = uncal_x * MAG_BIAS[1][0] + uncal_y * MAG_BIAS[1][1] + MAG_BIAS[1][2]
 
     return cal_x, cal_y
 
 
+MAG_REGISTERS = [[MAG_X_L, MAG_X_H], [MAG_Y_L, MAG_Y_H], [MAG_Z_L, MAG_Z_H]]
+print(MAG_REGISTERS)
+
+MAG_BIAS = [[1.051173994115047, 0.023163617823031002, 460.15600170384727],
+            [0.02316361782303098, 1.0104848800632054, -1771.4260099481783],
+            [0.0, 0.0, 1.0]]
+
+lat = 54.5
+long = -6
+
+d = geomag.declination(lat, long)
+
 while True:
-    m_x = read_sensor_data([MAG_X_H, MAG_X_L])
-    m_y = read_sensor_data([MAG_Y_H, MAG_Y_L])
-    m_z = read_sensor_data([MAG_Z_H, MAG_Z_L])
+    m_x = read_sensor_data(MAG_REGISTERS[0])
+    m_y = read_sensor_data(MAG_REGISTERS[1])
+    m_z = read_sensor_data(MAG_REGISTERS[2])
 
-    x, y = apply_calibration(m_x, m_y)
+    # cal_x = m_x * MAG_BIAS[0][0] + m_y * MAG_BIAS[0][1] + MAG_BIAS[0][2]
+    # cal_y = m_x * MAG_BIAS[1][0] + m_y * MAG_BIAS[1][1] + MAG_BIAS[1][2]
 
-    b = math.degrees(math.atan2(y, x))
+    b = math.degrees(math.atan2(m_z, m_x))
+
+    b += d
+
     if b < 0:
         b += 360.0
-
     print(b)
+    # print(str(m_x) + ',' + str(m_y) + ',' + str(m_z))
+
+
