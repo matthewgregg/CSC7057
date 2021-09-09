@@ -75,43 +75,41 @@ BUS.write_byte_data(DEVICE_ADDRESS, CTRL_REG3_M, MEAS_CONT)
 BUS.write_byte_data(DEVICE_ADDRESS, CTRL_REG4_M, Z_OP_MODE_UHIGH)
 
 
-def apply_calibration(uncal_x, uncal_y, uncal_z) -> tuple[float, float, float]:
-    x_cal_max_min = [-7656, 1020]
-    y_cal_max_min = [-4324, 4398]
-    z_cal_max_min = [-4364, 4144]
-
-    x_cal_max_min = [-4508, 2294]
-    y_cal_max_min = [-1024, 5448]
-    z_cal_max_min = [-11767, -5097]
-
-    uncal_x = uncal_x - (x_cal_max_min[0] + x_cal_max_min[1]) / 2
-    uncal_y = uncal_y - (y_cal_max_min[0] + y_cal_max_min[1]) / 2
-    uncal_z = uncal_z - (z_cal_max_min[0] + z_cal_max_min[1]) / 2
+def apply_calibration(uncal_x, uncal_y) -> tuple[float, float]:
+    # x_cal_max_min = [-7656, 1020]
+    # y_cal_max_min = [-4324, 4398]
+    # z_cal_max_min = [-4364, 4144]
 
     # cal = [[1.0206151090681648, 0.03838325349919703, -318.0519914842439],
     #        [0.03838325349919701, 1.0714657460366654, 106.74930601148539],
     #        [0.0, 0.0, 1.0]]
+    """
+    To calculate single matrix from approx and precise biases
+    approx_bias = [-1107, 2212, -8432]
 
     cal = [[1.0278762756271655, 0.055201472560838794, -556.5738414085462],
            [0.05520147256083878, 1.1093116818631081, -288.91935703975946],
-           [0.0, 0.0, 1.0]]
+           [1.0, 0.0, 0.0]]
+
+    cal[0][2] -= (approx_bias[0] * cal[0][0] + approx_bias[1] * cal[0][1])
+    cal[1][2] -= (approx_bias[0] * cal[1][0] + approx_bias[1] * cal[1][1])
+    """
+    cal = [[1.0278762756271655, 0.055201472560838794, 459.17953840615064],
+           [0.05520147256083878, 1.1093116818631081, -2681.608767196106],
+           [1.0, 0.0, 0.0]]
 
     cal_x = uncal_x * cal[0][0] + uncal_y * cal[0][1] + cal[0][2]
     cal_y = uncal_x * cal[1][0] + uncal_y * cal[1][1] + cal[1][2]
-    cal_z = uncal_z * cal[2][0] + uncal_z * cal[2][1] + cal[2][2]
 
-    return cal_x, cal_y, cal_z
+    return cal_x, cal_y
 
 
-x_offset = [1e6, -1e6]
-y_offset = [1e6, -1e6]
-z_offset = [1e6, -1e6]
 while True:
     m_x = read_sensor_data([MAG_X_H, MAG_X_L])
     m_y = read_sensor_data([MAG_Y_H, MAG_Y_L])
     m_z = read_sensor_data([MAG_Z_H, MAG_Z_L])
 
-    x, y, z = apply_calibration(m_x, m_y, m_z)
+    x, y = apply_calibration(m_x, m_y)
 
     b = math.degrees(math.atan2(y, x))
     if b < 0:

@@ -7,7 +7,6 @@ import geomag
 from scipy.optimize import curve_fit
 import gps
 import kalman
-import shared
 
 
 class IMU(object):
@@ -17,7 +16,7 @@ class IMU(object):
     z = 0
 
     def __init__(self, device_address, gyro_scale, accel_add, gyro_add, mag_add=None, accel_bias=None, gyro_bias=None,
-                 mag_bias=None, *args: list[int, int]):
+                 mag_bias=None, *args: list[int, int, int]):
         """
         Initialise IMU
         :param device_address: the accelerometer and gyroscope bus address
@@ -28,15 +27,18 @@ class IMU(object):
         :param accel_bias: the accelerometer's bias
         :param gyro_bias: the gyroscope's bias
         :param mag_bias: the magnetometer bias
-        :param args: miscellaneous addresses and values to be written
+        :param args: miscellaneous setup addresses with device address and value
         """
         if accel_bias is None:
-            accel_bias = [[1, 0], [1, -0], [1, 0]]
+            accel_bias = [[1, 0], [1, 0], [1, 0]]
 
         if gyro_bias is None:
             gyro_bias = [0, 0, 0]
 
-        if device_address is list:
+        if mag_bias is None:
+            mag_bias = [[1, 0, 0], [1, 0, 0], [1, 0, 0]]
+
+        if isinstance(device_address, list):
             self.acc_gyro_device_address = device_address[0]
             self.mag_device_address = device_address[1]
         else:
@@ -44,23 +46,21 @@ class IMU(object):
 
         self.accel_add = accel_add
         self.gyro_add = gyro_add
+        self.gyro_scale = gyro_scale
         self.mag_add = mag_add
         self.accel_bias = accel_bias
         self.gyro_bias = gyro_bias
-        self.gyro_scale = gyro_scale
         self.mag_bias = mag_bias
 
         for value in args:
             self.BUS.write_byte_data(value[0], value[1], value[2])
 
-        print(self.__read_sensor_data(accel_add[0]))
-
-    def __read_sensor_data(self, addr) -> float:
+    def __read_sensor_data(self, device_address: int, addr: list[int, int]) -> int:
         """
         Write data to an address on the bus
         """
-        low = self.BUS.read_byte_data(self.acc_gyro_device_address, addr[0])
-        high = self.BUS.read_byte_data(self.acc_gyro_device_address, addr[1])
+        low = self.BUS.read_byte_data(device_address, addr[0])
+        high = self.BUS.read_byte_data(device_address, addr[1])
         # bitwise left shift high by 8 bits, then bitwise or on shifted high and low
         value = (high << 8 | low)
         # wrap around overflow
@@ -126,9 +126,12 @@ class IMU(object):
         kalman_y = 0
         kalman_z = 0
 
-        a_x = self.__fit_acc_bias(self.__read_sensor_data(self.accel_add[0]), *self.accel_bias[0])
-        a_y = self.__fit_acc_bias(self.__read_sensor_data(self.accel_add[1]), *self.accel_bias[1])
-        a_z = self.__fit_acc_bias(self.__read_sensor_data(self.accel_add[2]), *self.accel_bias[2])
+        a_x = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0]),
+                                  *self.accel_bias[0])
+        a_y = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1]),
+                                  *self.accel_bias[1])
+        a_z = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[2]),
+                                  *self.accel_bias[2])
 
         timer = time.perf_counter()
 
@@ -137,18 +140,17 @@ class IMU(object):
         pitch_y = math.degrees(math.atan(-a_x / math.sqrt((a_y ** 2) + (a_z ** 2))))
 
         if self.mag_add is not None:
-            m_x = self.__read_sensor_data(self.mag_add[0])
-            m_y = self.__read_sensor_data(self.mag_add[1])
-            m_z = self.__read_sensor_data(self.mag_add[2])
+            m_x = self.__read_sensor_data(self.mag_device_address, self.mag_add[0])
+            m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
+            m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
 
             # yaw_x_component = m_x * np.cos(pitch_y) + m_z * np.sin(pitch_y)
             # yaw_y_component = m_x * np.sin(roll_x) * np.sin(pitch_y) + m_y * np.cos(roll_x) \
             #                   + m_z * np.sin(roll_x) * np.cos(pitch_y)
 
             yaw_y_component = m_z * np.sin(roll_x) - m_y * np.cos(roll_x)
-            yaw_x_component = m_x * np.cos(pitch_y) \
-                              + m_y * np.sin(roll_x) * np.sin(pitch_y) \
-                              + m_z * np.cos(roll_x) * np.sin(pitch_y)
+            yaw_x_component = m_x * np.cos(pitch_y) + m_y * np.sin(roll_x) * np.sin(pitch_y) + m_z * np.cos(
+                roll_x) * np.sin(pitch_y)
 
             yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
 
@@ -162,13 +164,19 @@ class IMU(object):
             #     print('IMU stopped at ' + finish_time)
             #     break
 
-            a_x = self.__fit_acc_bias(self.__read_sensor_data(self.accel_add[0]), *self.accel_bias[0])
-            a_y = self.__fit_acc_bias(self.__read_sensor_data(self.accel_add[1]), *self.accel_bias[1])
-            a_z = self.__fit_acc_bias(self.__read_sensor_data(self.accel_add[2]), *self.accel_bias[2])
+            a_x = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0]),
+                                      *self.accel_bias[0])
+            a_y = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1]),
+                                      *self.accel_bias[1])
+            a_z = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[2]),
+                                      *self.accel_bias[2])
 
-            g_x = (self.__read_sensor_data(self.gyro_add[0]) + self.gyro_bias[0]) * self.gyro_scale
-            g_y = (self.__read_sensor_data(self.gyro_add[1]) + self.gyro_bias[1]) * self.gyro_scale
-            g_z = (self.__read_sensor_data(self.gyro_add[2]) + self.gyro_bias[2]) * self.gyro_scale
+            g_x = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[0]) + self.gyro_bias[
+                0]) * self.gyro_scale
+            g_y = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[1]) + self.gyro_bias[
+                1]) * self.gyro_scale
+            g_z = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[2]) + self.gyro_bias[
+                2]) * self.gyro_scale
 
             dt = time.perf_counter() - timer
             timer = time.perf_counter()
@@ -177,9 +185,9 @@ class IMU(object):
             pitch_y = math.degrees(math.atan(-a_x / math.sqrt((a_y ** 2) + (a_z ** 2))))
 
             if self.mag_add is not None:
-                m_x = self.__read_sensor_data(self.mag_add[0])
-                m_y = self.__read_sensor_data(self.mag_add[1])
-                m_z = self.__read_sensor_data(self.mag_add[2])
+                m_x = self.__read_sensor_data(self.mag_device_address, self.mag_add[0])
+                m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
+                m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
 
                 # https://ozzmaker.com/compass2/
                 # yaw_x_component = m_x * np.cos(pitch_y) + m_z * np.sin(pitch_y)
@@ -209,7 +217,7 @@ class IMU(object):
             self.y = kalman_y
             self.z = kalman_z
 
-            print(kalman_x, kalman_y)
+            print(roll_x, pitch_y, yaw_z)
 
             await asyncio.sleep(0.5)
 
@@ -231,9 +239,9 @@ class IMU(object):
         bias = np.array([0.0, 0.0, 0.0])
         input("Keep the gyroscope still while gathering data. Press enter when ready.")
         for i in range(500):
-            g_x = self.__read_sensor_data(self.accel_add[0])
-            g_y = self.__read_sensor_data(self.accel_add[1])
-            g_z = self.__read_sensor_data(self.accel_add[2])
+            g_x = self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0])
+            g_y = self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1])
+            g_z = self.__read_sensor_data(self.mag_device_address, self.accel_add[2])
             bias += [g_x, g_y, g_z]
             time.sleep(0.02)
 
@@ -249,6 +257,7 @@ class IMU(object):
         bias = [[], [], []]
         axes = ['x', 'y', 'z']
         axes_addresses = [*self.accel_add]
+        device_address = [self.acc_gyro_device_address, self.acc_gyro_device_address, self.mag_device_address]
         directions = ["up", "down", "perpendicular"]
         axis_coefficients = [1, -1, 0]
         for axis_index, axis in enumerate(axes):
@@ -257,59 +266,56 @@ class IMU(object):
                 input("Point the " + axis + "-axis " + direction + " and keep still. Press enter when ready.")
                 axis_data = []
                 while len(axis_data) < sample_size:
-                    axis_data.append(self.__read_sensor_data(axes_addresses[axis_index]))
+                    axis_data.append(self.__read_sensor_data(device_address[axis_index], axes_addresses[axis_index]))
 
                 data[direction_index] = np.array(axis_data)
 
             x_data = data[0] + data[1] + data[2]
-            # y_data = sum(axis_coefficients * np.ones(np.shape(data)))
+            # y_data = np.sum(axis_coefficients * np.ones(np.shape(data)), axis=0)
             y_data = 1 * np.ones(np.shape(data[0])) + -1 * np.ones(np.shape(data[1])) + 0 * np.ones(np.shape(data[2]))
 
             fit_params, _ = curve_fit(self.__fit_acc_bias, x_data, y_data, maxfev=10000)
             bias[axis_index] = fit_params
-        print('Accelerometer Calibrated')
         return bias
 
     def accel_cal(self):
-        print("-"*50)
+        print("-" * 50)
         print("Accelerometer Calibration")
-        mpu_offsets = [[],[],[]] # offset array to be printed
-        axis_vec = ['z','y','x'] # axis labels
-        cal_directions = ["upward","downward","perpendicular to gravity"] # direction for IMU cal
-        cal_indices = [2,1,0] # axis indices
-        for qq,ax_qq in enumerate(axis_vec):
-            ax_offsets = [[],[],[]]
-            print("-"*50)
-            for direc_ii,direc in enumerate(cal_directions):
-                input("-"*8+" Press Enter and Keep IMU Steady to Calibrate the Accelerometer with the -"+ \
-                      ax_qq+"-axis pointed "+direc)
+        mpu_offsets = [[], [], []]  # offset array to be printed
+        axis_vec = ['z', 'y', 'x']  # axis labels
+        cal_directions = ["upward", "downward", "perpendicular to gravity"]  # direction for IMU cal
+        cal_indices = [2, 1, 0]  # axis indices
+        for qq, ax_qq in enumerate(axis_vec):
+            ax_offsets = [[], [], []]
+            print("-" * 50)
+            for direc_ii, direc in enumerate(cal_directions):
+                input("-" * 8 + " Press Enter and Keep IMU Steady to Calibrate the Accelerometer with the -" +
+                      ax_qq + "-axis pointed " + direc)
                 mpu_array = []
-                while len(mpu_array)<1000:
+                while len(mpu_array) < 1000:
                     try:
-                        ax = self.__read_sensor_data(self.accel_add[0])
-                        ay = self.__read_sensor_data(self.accel_add[1])
-                        az = self.__read_sensor_data(self.accel_add[2])
-                        mpu_array.append([ax,ay,az]) # append to array
+                        ax = self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0])
+                        ay = self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1])
+                        az = self.__read_sensor_data(self.mag_device_address, self.accel_add[2])
+                        mpu_array.append([ax, ay, az])  # append to array
                     except:
                         continue
-                ax_offsets[direc_ii] = np.array(mpu_array)[:,cal_indices[qq]] # offsets for direction
+                ax_offsets[direc_ii] = np.array(mpu_array)[:, cal_indices[qq]]  # offsets for direction
 
             # Use three calibrations (+1g, -1g, 0g) for linear fit
-            popts,_ = curve_fit(self.__fit_acc_bias,np.append(np.append(ax_offsets[0],
-                                                              ax_offsets[1]),ax_offsets[2]),
-                                np.append(np.append(1.0*np.ones(np.shape(ax_offsets[0])),
-                                                    -1.0*np.ones(np.shape(ax_offsets[1]))),
-                                          0.0*np.ones(np.shape(ax_offsets[2]))),
-                                maxfev=10000)
-            mpu_offsets[cal_indices[qq]] = popts # place slope and intercept in offset array
+            popts, _ = curve_fit(self.__fit_acc_bias, np.append(np.append(ax_offsets[0],
+                                                                          ax_offsets[1]), ax_offsets[2]),
+                                 np.append(np.append(1.0 * np.ones(np.shape(ax_offsets[0])),
+                                                     -1.0 * np.ones(np.shape(ax_offsets[1]))),
+                                           0.0 * np.ones(np.shape(ax_offsets[2]))),
+                                 maxfev=10000)
+            mpu_offsets[cal_indices[qq]] = popts  # place slope and intercept in offset array
         print('Accelerometer Calibrations Complete')
         return mpu_offsets
 
-    def calibrate_magnetometer_approximate(self) -> list[list[float, float],
-                                                         list[float, float],
-                                                         list[float, float]]:
+    def calibrate_magnetometer_approximate(self) -> list[float, float, float]:
         """
-        Calibrate magnetometer approximately for hard iron effects
+        Calibrate magnetometer approximately for hard iron effects to allow more precise calibration to be performed
         https://ozzmaker.com/compass3/
         :return: an array of magnetometer biases
         """
@@ -321,9 +327,9 @@ class IMU(object):
 
         count = 0
         while count < 100:
-            m_x = self.__read_sensor_data(self.mag_add[0])
-            m_y = self.__read_sensor_data(self.mag_add[1])
-            m_z = self.__read_sensor_data(self.mag_add[2])
+            m_x = self.__read_sensor_data(self.acc_gyro_device_address, self.mag_add[0])
+            m_y = self.__read_sensor_data(self.acc_gyro_device_address, self.mag_add[1])
+            m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
 
             if m_x < x_bias[0]:
                 count = 0
@@ -352,12 +358,29 @@ class IMU(object):
             print(y_bias)
             print(z_bias)
 
-        return [x_bias, y_bias, z_bias]
+        # approximate mean value of samples
+        x_bias_mean = (x_bias[0] + x_bias[1]) / 2
+        y_bias_mean = (y_bias[0] + y_bias[1]) / 2
+        z_bias_mean = (z_bias[0] + z_bias[1]) / 2
 
-    def calibrate_magnetometer_precise(self) -> list[list[float, float, float],
-                                                     list[float, float, float],
-                                                     list[float, float, float]]:
+        return [x_bias_mean, y_bias_mean, z_bias_mean]
+
+    def calibrate_magnetometer_precise(self, approximate_bias) -> list[list[float, float, float],
+                                                                       list[float, float, float],
+                                                                       list[float, float, float]]:
         """
-        Calibrate magnetometer for hard and soft iron effects
+        Calibrate magnetometer x and y axes for hard and soft iron effects
+        The z axis bias is not calculated for simplification. The z axis is not used to calculate bearing
         :return: an array of magnetometer biases
         """
+        # TODO calculate calibration matrix here
+
+        cal = [[0, 0, 0],
+               [0, 0, 0],
+               [0, 0, 0]]
+
+        # adjust values to compensate for approximate calibration
+        cal[0][2] -= (approximate_bias[0] * cal[0][0] + approximate_bias[1] * cal[0][1])
+        cal[1][2] -= (approximate_bias[0] * cal[1][0] + approximate_bias[1] * cal[1][1])
+
+        return cal

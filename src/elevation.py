@@ -1,5 +1,4 @@
 import numpy as np
-
 import imu
 
 # accelerometer/gyroscope register addresses
@@ -10,9 +9,9 @@ DEVICE_ADDRESS = [0x6A, 0x1C]
 
 #######################################
 
-# 208 Hz normal mode, ±2g, output from 1st stage digital filter
+# Accelerometer - 208 Hz normal mode, ±2g, output from 1st stage digital filter
 CTRL1_XL = 0x10
-# 208 Hz normal mode, 250 dps, 00, FS
+# Gyroscope - 208 Hz normal mode, 250 dps, 00, FS
 CTRL2_G = 0x11
 # disable i3c
 CTRL9_XL = 0x18
@@ -47,25 +46,18 @@ MAG_BIAS = [[1.0076664788827325, 0.03085027311558635, 2894.471358004767],
             [0.030850273115586305, 1.1241429560902958, 100.64453832541044],
             [0.0, 0.0, 1.0]]
 
-MAG_X_L = 0x28
-MAG_X_H = 0x29
-MAG_Y_L = 0x2A
-MAG_Y_H = 0x2B
-MAG_Z_L = 0x2C
-MAG_Z_H = 0x2D
-
 acc_setup = [[CTRL9_XL, 1],
              [CTRL1_XL, 0b01010000],
              [CTRL2_G, 0b01010000]]
 
 mag_setup = [[CTRL_REG1_M, XY_OP_MODE_UHIGH],
-             [CTRL_REG4_M, Z_OP_MODE_UHIGH],
              [CTRL_REG1_M, D_RATE_0_685],
              [CTRL_REG2_M, MAG_GAIN_4G],
-             [CTRL_REG3_M, MEAS_CONT]]
+             [CTRL_REG3_M, MEAS_CONT],
+             [CTRL_REG4_M, Z_OP_MODE_UHIGH]]
 
 # prepend device address to each register and join arrays
 setup = np.column_stack((np.full((len(acc_setup), 1), DEVICE_ADDRESS[0]), acc_setup))
 setup = np.concatenate((setup, np.column_stack((np.full((len(mag_setup), 1), DEVICE_ADDRESS[1]), mag_setup))), axis=0)
 
-elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, ACC_BIAS, GYRO_BIAS, MAG_BIAS, *setup)
+elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, None, None, None, *setup)
