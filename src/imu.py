@@ -242,7 +242,7 @@ class IMU(object):
             self.y = kalman_y
             self.z = kalman_z
 
-            print(round(kalman_x, 1), round(kalman_y, 1), round(yaw_z, 1))
+            print(round(kalman_x, 1), round(kalman_y, 1), round(kalman_z, 1))
 
             # await asyncio.sleep(0.05)
 
@@ -294,7 +294,7 @@ class IMU(object):
             x_data = np.append(np.append(data[0], data[1]), data[2])
 
             y_data = np.append(np.append(1.0 * np.ones(np.shape(data[0])), -1.0 * np.ones(np.shape(data[1]))), 0.0 * np.ones(np.shape(data[2])))
-            print(y_data)
+
             fit_params, _ = curve_fit(self.__fit_acc_bias, x_data, y_data, maxfev=10000)
             bias[axis_index] = fit_params
         return bias

@@ -1,5 +1,6 @@
 import numpy as np
 import imu
+import asyncio
 
 # accelerometer/gyroscope register addresses
 # from register map - https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf
@@ -20,10 +21,9 @@ CTRL9_XL = 0x18
 ACC_REGISTERS = [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]]
 GYRO_REGISTERS = [[0x22, 0x23], [0x24, 0x25], [0x26, 0x27]]
 
-
-ACC_BIAS = [[ 6.11505507e-05, -3.49673049e-03],
-            [1.00000000e+00, 9.77528185e-16],
-            [1.00000000e+00, 9.77528185e-16]]
+ACC_BIAS = [[6.10987778e-05, -3.69227774e-03],
+            [6.09998042e-05, -8.51929284e-03],
+            [6.04545451e-05, -6.48953360e-03]]
 
 GYRO_SCALE = 8.75 / 1000
 GYRO_BIAS = [11.367, -31.793, -24.028]
@@ -37,7 +37,7 @@ CTRL_REG4_M = 0x23
 
 XY_OP_MODE_UHIGH = 0x60  # Ultra-High-Performance Mode,  ODR [Hz]: 155, FAST_ODR: 1
 Z_OP_MODE_UHIGH = 0x0C
-D_RATE_80 = 0x1C  # ODR = 0.625 Hz
+D_RATE_80 = 0x1C  # ODR = 80 Hz
 MAG_GAIN_4G = 0x00  # Full scale = +/-4 Gauss, LSB first
 MEAS_CONT = 0x00  # Continuous-Conversion Mode
 
@@ -61,4 +61,7 @@ mag_setup = [[CTRL_REG1_M, XY_OP_MODE_UHIGH],
 setup = np.column_stack((np.full((len(acc_setup), 1), DEVICE_ADDRESS[0]), acc_setup))
 setup = np.concatenate((setup, np.column_stack((np.full((len(mag_setup), 1), DEVICE_ADDRESS[1]), mag_setup))), axis=0)
 
-elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, ACC_BIAS, GYRO_BIAS, MAG_BIAS, *setup)
+elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, ACC_BIAS, GYRO_BIAS,
+                    MAG_BIAS, *setup)
+
+asyncio.run(elevation.stream_readings([1, 2, [3]]))
