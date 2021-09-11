@@ -51,7 +51,8 @@ class IMU(object):
         self.mag_add = mag_add
         self.accel_bias = accel_bias
         self.gyro_bias = gyro_bias
-        self.mag_bias = mag_bias
+        self.mag_bias_a_inv = mag_bias[0]
+        self.mag_bias_b = mag_bias[1]
 
         for value in args:
             self.BUS.write_byte_data(value[0], value[1], value[2])
@@ -145,17 +146,23 @@ class IMU(object):
             m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
             m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
 
-            cal_m_x = m_x * self.mag_bias[0][0] + m_y * self.mag_bias[0][1] + self.mag_bias[0][2]
-            cal_m_y = m_x * self.mag_bias[1][0] + m_y * self.mag_bias[1][1] + self.mag_bias[1][2]
-
             # yaw_x_component = m_x * np.cos(pitch_y) + m_z * np.sin(pitch_y)
             # yaw_y_component = m_x * np.sin(roll_x) * np.sin(pitch_y) + m_y * np.cos(roll_x) \
             #                   + m_z * np.sin(roll_x) * np.cos(pitch_y)
 
-            yaw_y_component = m_z * np.sin(roll_x) - cal_m_y * np.cos(roll_x)
-            yaw_x_component = cal_m_x * np.cos(pitch_y) \
-                              + cal_m_y * np.sin(roll_x) * np.sin(pitch_y) \
-                              + m_z * np.cos(roll_x) * np.sin(pitch_y)
+            h = np.array([[m_x, m_y, m_z]]).T
+            h_unit_vec = np.matmul(self.mag_bias_a_inv, h - self.mag_bias_b)
+            cal_m_x = h_unit_vec[0][0]
+            cal_m_y = h_unit_vec[1][0]
+            cal_m_z = h_unit_vec[2][0]
+
+            yaw_y_component = cal_m_y
+            yaw_x_component = cal_m_x
+
+            # yaw_y_component = cal_m_z * np.sin(roll_x) - cal_m_y * np.cos(roll_x)
+            # yaw_x_component = cal_m_x * np.cos(pitch_y) \
+            #                   + cal_m_y * np.sin(roll_x) * np.sin(pitch_y) \
+            #                   + cal_m_z * np.cos(roll_x) * np.sin(pitch_y)
 
             yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
 
@@ -194,24 +201,28 @@ class IMU(object):
                 m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
                 m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
 
-                cal_m_x = m_x * self.mag_bias[0][0] + m_y * self.mag_bias[0][1] + self.mag_bias[0][2]
-                cal_m_y = m_x * self.mag_bias[1][0] + m_y * self.mag_bias[1][1] + self.mag_bias[1][2]
+                h = np.array([[m_x, m_y, m_z]]).T
+                h_unit_vec = np.matmul(self.mag_bias_a_inv, h - self.mag_bias_b)
+                cal_m_x = h_unit_vec[0][0]
+                cal_m_y = h_unit_vec[1][0]
+                cal_m_z = h_unit_vec[2][0]
 
                 # https://ozzmaker.com/compass2/
                 # yaw_x_component = m_x * np.cos(pitch_y) + m_z * np.sin(pitch_y)
                 # yaw_y_component = m_x * np.sin(roll_x) * np.sin(pitch_y) + m_y * np.cos(roll_x) \
                 #                   + m_z * np.sin(roll_x) * np.cos(pitch_y)
 
-                yaw_y_component = m_z * np.sin(roll_x) - cal_m_y * np.cos(roll_x)
-                yaw_x_component = cal_m_x * np.cos(pitch_y) \
-                                  + cal_m_y * np.sin(roll_x) * np.sin(pitch_y) \
-                                  + m_z * np.cos(roll_x) * np.sin(pitch_y)
+                yaw_y_component = cal_m_y
+                yaw_x_component = cal_m_x
+
+                # yaw_y_component = cal_m_z * np.sin(roll_x) - cal_m_y * np.cos(roll_x)
+                # yaw_x_component = cal_m_x * np.cos(pitch_y) \
+                #                   + cal_m_y * np.sin(roll_x) * np.sin(pitch_y) \
+                #                   + cal_m_z * np.cos(roll_x) * np.sin(pitch_y)
 
                 # TODO magnetic z reading is not calibrated!
 
                 yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
-
-                yaw_z = np.degrees(np.arctan2(cal_m_y, cal_m_x))
 
                 kalman_z = kalman_filter_z.get_angle(yaw_z, g_z, dt)
 
@@ -293,7 +304,8 @@ class IMU(object):
 
             x_data = np.append(np.append(data[0], data[1]), data[2])
 
-            y_data = np.append(np.append(1.0 * np.ones(np.shape(data[0])), -1.0 * np.ones(np.shape(data[1]))), 0.0 * np.ones(np.shape(data[2])))
+            y_data = np.append(np.append(1.0 * np.ones(np.shape(data[0])), -1.0 * np.ones(np.shape(data[1]))),
+                               0.0 * np.ones(np.shape(data[2])))
 
             fit_params, _ = curve_fit(self.__fit_acc_bias, x_data, y_data, maxfev=10000)
             bias[axis_index] = fit_params
