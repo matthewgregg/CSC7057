@@ -156,13 +156,18 @@ class IMU(object):
             cal_m_y = h_unit_vec[1][0]
             cal_m_z = h_unit_vec[2][0]
 
-            yaw_y_component = cal_m_y
-            yaw_x_component = cal_m_x
+            # yaw_y_component = cal_m_y
+            # yaw_x_component = cal_m_x
 
-            # yaw_y_component = cal_m_z * np.sin(roll_x) - cal_m_y * np.cos(roll_x)
-            # yaw_x_component = cal_m_x * np.cos(pitch_y) \
-            #                   + cal_m_y * np.sin(roll_x) * np.sin(pitch_y) \
-            #                   + cal_m_z * np.cos(roll_x) * np.sin(pitch_y)
+            # yaw_x_component = cal_m_x * np.cos(np.radians(pitch_y)) + cal_m_z * np.sin(np.radians(pitch_y))
+            # yaw_y_component = cal_m_x * np.sin(np.radians(roll_x)) * np.sin(np.radians(pitch_y)) \
+            #                   + cal_m_y * np.cos(np.radians(roll_x)) \
+            #                   + cal_m_z * np.sin(np.radians(roll_x)) * np.cos(np.radians(pitch_y))
+
+            yaw_y_component = cal_m_z * np.sin(np.radians(kalman_x)) - cal_m_y * np.cos(np.radians(kalman_x))
+            yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) \
+                          + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
+                          + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
 
             yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
 
@@ -208,17 +213,18 @@ class IMU(object):
                 cal_m_z = h_unit_vec[2][0]
 
                 # https://ozzmaker.com/compass2/
-                # yaw_x_component = m_x * np.cos(pitch_y) + m_z * np.sin(pitch_y)
-                # yaw_y_component = m_x * np.sin(roll_x) * np.sin(pitch_y) + m_y * np.cos(roll_x) \
-                #                   + m_z * np.sin(roll_x) * np.cos(pitch_y)
+                # yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) + cal_m_z * np.sin(np.radians(kalman_y))
+                # yaw_y_component = cal_m_x * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
+                #                   + cal_m_y * np.cos(np.radians(kalman_x)) \
+                #                   + cal_m_z * np.sin(np.radians(kalman_x)) * np.cos(np.radians(kalman_y))
 
-                yaw_y_component = cal_m_y
-                yaw_x_component = cal_m_x
+                # yaw_y_component = cal_m_y
+                # yaw_x_component = cal_m_x
 
-                # yaw_y_component = cal_m_z * np.sin(roll_x) - cal_m_y * np.cos(roll_x)
-                # yaw_x_component = cal_m_x * np.cos(pitch_y) \
-                #                   + cal_m_y * np.sin(roll_x) * np.sin(pitch_y) \
-                #                   + cal_m_z * np.cos(roll_x) * np.sin(pitch_y)
+                yaw_y_component = cal_m_z * np.sin(np.radians(kalman_x)) - cal_m_y * np.cos(np.radians(kalman_x))
+                yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) \
+                                  + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
+                                  + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
 
                 # TODO magnetic z reading is not calibrated!
 
