@@ -166,8 +166,8 @@ class IMU(object):
 
             yaw_y_component = cal_m_z * np.sin(np.radians(kalman_x)) - cal_m_y * np.cos(np.radians(kalman_x))
             yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) \
-                          + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
-                          + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
+                              + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
+                              + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
 
             yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
 
@@ -323,12 +323,12 @@ class IMU(object):
         https://ozzmaker.com/compass3/
         :return: an array of magnetometer biases
         """
-        x_bias = [1e6, -1e6]
-        y_bias = [1e6, -1e6]
-        z_bias = [1e6, -1e6]
-        x_mean = 0
-        y_mean = 0
-        z_mean = 0
+        # magnetometer value is a signed 16 bit value
+        limit = 2 ** 16 / 2
+        # arrays to store minimum and maximum values
+        x_bias = [limit, -limit]
+        y_bias = [limit, -limit]
+        z_bias = [limit, -limit]
 
         input("Rotate the magnetometer in all directions. Calibration will complete when the values stabilise.")
 
@@ -339,10 +339,6 @@ class IMU(object):
             m_x = self.__read_sensor_data(self.acc_gyro_device_address, self.mag_add[0])
             m_y = self.__read_sensor_data(self.acc_gyro_device_address, self.mag_add[1])
             m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
-
-            x_mean = ((total - 1) * x_mean + m_x) / total
-            y_mean = ((total - 1) * y_mean + m_y) / total
-            y_mean = ((total - 1) * y_mean + m_y) / total
 
             if m_x < x_bias[0]:
                 i = 0
@@ -379,22 +375,18 @@ class IMU(object):
 
         return [x_bias_mean, y_bias_mean, z_bias_mean]
 
-    def calibrate_magnetometer_precise(self, approximate_bias) -> list[list[float, float, float],
-                                                                       list[float, float, float],
-                                                                       list[float, float, float]]:
+    def calibrate_magnetometer_precise(self, approximate_bias) -> tuple[list[list[float, float, float],
+                                                                             list[float, float, float],
+                                                                             list[float, float, float]],
+                                                                        list[float, float, float]]:
         """
-        Calibrate magnetometer x and y axes for hard and soft iron effects
-        The z axis bias is not calculated for simplification. The z axis is not used to calculate bearing
-        :return: an array of magnetometer biases
+        Calibrate magnetometer in 3 dimensions for hard and soft iron effects
+        :return: two arrays of magnetometer biases
         """
         # TODO calculate calibration matrix here
 
-        cal = [[0, 0, 0],
-               [0, 0, 0],
-               [0, 0, 0]]
-
-        # adjust values to compensate for approximate calibration
-        cal[0][2] -= (approximate_bias[0] * cal[0][0] + approximate_bias[1] * cal[0][1])
-        cal[1][2] -= (approximate_bias[0] * cal[1][0] + approximate_bias[1] * cal[1][1])
+        cal = [[1, 0, 0],
+               [0, 1, 0],
+               [0, 0, 1]]
 
         return cal
