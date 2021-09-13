@@ -177,7 +177,7 @@ async def stream_decode_signal(p: list) -> None:
     async for samples in sdr.stream(5 * int(sample_rate)):
         if gps.get_time() > finish_time or not shared.running.value:
             print('doppler stopped at ' + finish_time)
-        sdr.stop()
+            sdr.stop()
         decoded = apt.decode(sample_rate, samples)
         output.extend(decoded)
         PIL.Image.fromarray(np.array(output)).save('media/image.png')
@@ -205,16 +205,16 @@ async def motor_controller(s: sgp4lib.EarthSatellite, p: list) -> None:
     elevation_motor = [24, 25, 8, 7]
     azimuth_motor_ratio = -3
     azimuth_motor = [12, 16, 20, 21]
-    # TODO azimuth motor
     # wait for accelerometer data
     await asyncio.sleep(1)
     while True:
-        antenna_elevation, _ = elevation.elevation.get_adjusted_elevation()
+        _, antenna_elevation, _ = elevation.elevation.get_readings()
+        antenna_azimuth = elevation.elevation.get_bearing()
         if gps.get_time() > finish_time or not shared.running.value:
             print('motor stopped')
             print('resetting elevation motor')
             elevation_angle_delta = (90 - antenna_elevation) * elevation_motor_ratio
-            print('moving', antenna_elevation)
+            print('moving', 90 - antenna_elevation)
             await motor.rotate(elevation_motor, elevation_angle_delta, 0)
             break
 
@@ -223,13 +223,34 @@ async def motor_controller(s: sgp4lib.EarthSatellite, p: list) -> None:
         t = ts.utc(utc.year, utc.month, utc.day, utc.hour, utc.minute, utc.second)
         pos = (s - location).at(t)
         sat_elevation, sat_azimuth, _ = pos.altaz()
-        elevation_angle_delta = (abs(sat_elevation.degrees) - antenna_elevation) * elevation_motor_ratio
-        print('arm ', antenna_elevation)
-        print('sat ', abs(sat_elevation.degrees))
-        print('delta', abs(sat_elevation.degrees) - antenna_elevation)
+
+        sat_elevation = abs(sat_elevation.degrees)
+        sat_azimuth = sat_azimuth.degrees
+
+        # convert satellite azimuth (0,+90,0,-90) to accelerometer (-90,0,+90,±180)
+        if sat_elevation < 0:
+            sat_elevation += 90
+        else:
+            sat_elevation = 90 - sat_elevation
+
+        elevation_angle_delta = (antenna_elevation - sat_elevation) * elevation_motor_ratio
+        # add 90 as imu is perpendicular to antenna direction
+        azimuth_angle_delta = (sat_azimuth - antenna_azimuth)
+
+        if azimuth_angle_delta >= 180:
+            azimuth_angle_delta -= 360
+        elif azimuth_angle_delta < -180:
+            azimuth_angle_delta += 360
+
+        azimuth_angle_delta *= azimuth_motor_ratio
+
+        print('elevation moving ', abs(sat_elevation) - antenna_elevation, 'from', antenna_elevation)
+        print('azimuth moving ', azimuth_angle_delta / azimuth_motor_ratio, 'from', antenna_azimuth)
+
         await asyncio.gather(
-            asyncio.sleep(10),
-            motor.rotate(elevation_motor, elevation_angle_delta, 0)
+            motor.rotate(elevation_motor, elevation_angle_delta, 0),
+            motor.rotate(azimuth_motor, azimuth_angle_delta, 0),
+            asyncio.sleep(30)
         )
 
 
@@ -299,8 +320,6 @@ if __name__ == '__main__':
     sats = [noaa_15, noaa_18, noaa_19]
     lat, long = gps.get_coordinates()
     location = wgs84.latlon(lat, long)
-    i2c = board.I2C()
-    mpu = adafruit_mpu6050.MPU6050(i2c)
     try:
         sdr = RtlSdr()
         # super sample to increase analog to digital conversion resolution
