@@ -1,10 +1,4 @@
-import numpy as np
-import imu
-import asyncio
-
-# accelerometer/gyroscope register addresses
-# from register map - https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf
-# https://www.st.com/resource/en/datasheet/lsm6dsox.pdf
+import json
 
 DEVICE_ADDRESS = [0x6A, 0x1C]
 
@@ -17,7 +11,7 @@ CTRL2_G = 0x11
 # disable i3c
 CTRL9_XL = 0x18
 
-# low in first position, high in second position
+# lsb/low in first position, msb/high in second position (sensors are little endian, switch for big endian)
 ACC_REGISTERS = [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]]
 GYRO_REGISTERS = [[0x22, 0x23], [0x24, 0x25], [0x26, 0x27]]
 
@@ -63,11 +57,21 @@ mag_setup = [[CTRL_REG1_M, XY_OP_MODE_UHIGH],
              [CTRL_REG3_M, MEAS_CONT],
              [CTRL_REG4_M, Z_OP_MODE_UHIGH]]
 
-# prepend device address to each register and join arrays
-setup = np.column_stack((np.full((len(acc_setup), 1), DEVICE_ADDRESS[0]), acc_setup))
-setup = np.concatenate((setup, np.column_stack((np.full((len(mag_setup), 1), DEVICE_ADDRESS[1]), mag_setup))), axis=0)
+vals = {'accelerometer':
+            {0x6A :
+                 {'setup' : [[0x18, 1], [0x10, 0b01010000], [0x11, 0b01010000]],
+                'accaddress' : [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]],
+                'gyroaddress' : [[0x22, 0x23], [0x24, 0x25], [0x26, 0x27]],
+                'gyroscale' : 8.75 / 1000,
+                'accbias' : [[6.10987778e-05, -3.69227774e-03], [6.09998042e-05, -8.51929284e-03], [6.04545451e-05, -6.48953360e-03]],
+                'gyrobias' : [11.367, -31.793, -24.028]},
+        'magnetometer' :
+            {0x1C :
+                 {'setup' : [[0x20, 0x60], [0x20, 0x1C], [0x21, 0x00], [0x22, 0x00], [0x23, 0x0C]],
+                  'magaddress' : [[0x28, 0x29], [0x2A, 0x2B], [0x2C, 0x2D]],
+                  'magbiasa' : [[3.44057751e-04, 1.99840401e-05, 1.55847712e-07], [1.99840401e-05, 3.62689168e-04, 9.02826449e-06],[1.55847712e-07, 9.02826449e-06, 3.33093676e-04]],
+                  'magbiasb' : [[-757.24783875], [2323.69419632], [-151.7957312]]}}},
+        'motor' :
+            {'elevation' : [24, 25, 8, 7], 'azimuth' : [12, 16, 20, 21]}}
 
-elevation = imu.IMU(DEVICE_ADDRESS, GYRO_SCALE, ACC_REGISTERS, GYRO_REGISTERS, MAG_REGISTERS, ACC_BIAS, GYRO_BIAS,
-                    MAG_BIAS, *setup)
-
-asyncio.run(elevation.stream_readings([1, 2, [3]]))
+json.dump(vals, open('deviceconfig.json', 'w'))

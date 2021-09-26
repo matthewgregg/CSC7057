@@ -13,8 +13,6 @@
    <style>
      img {
          display: block;
-         margin-left: auto;
-         margin-right: auto;
          margin: auto;
          width: 100vh;
          max-width: 100vw;
@@ -23,11 +21,19 @@
    </style>
    <body>
    {% if running == 0 %}
-     <button style="font-size : 20px; width: 100%; height: 100px;">
-        <a href="/running" class="button">START</a>
-     </button>
+      <form action="/running" method="post" id="filter" enctype="application/x-www-form-urlencoded">
+         <label for="filter-type">Filter</label>
+         <select id="filter-type" name="filter-type">
+            <option value="grayscale" selected>Grayscale</option>
+            <option value="colour">Colour</option>
+            <option value="fire">Fire</option>
+            <option value="precipitation">Precipitation</option>
+            <option value="thermal">Thermal</option>
+         </select>
+         <input type="submit" value="START"/>
+      </form>
    {% else %}
-      <button style="font-size : 20px; width: 100%; height: 100px;">
+      <button>
          <a href="/" class="button">STOP</a>
       </button>
       <p id="time">&#8203;</p>

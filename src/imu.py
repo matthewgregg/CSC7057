@@ -2,21 +2,19 @@ import asyncio
 import time
 from typing import Union, Any
 import smbus
-import math
 import numpy as np
 import geomag
 from scipy.optimize import curve_fit
 from scipy import linalg
-# import gps
+import gps
 import kalman
 import shared
 
 
 class IMU(object):
-    BUS = smbus.SMBus(1)
-    x = 0
-    y = 0
-    z = 0
+    roll = 0
+    pitch = 0
+    yaw = 0
 
     def __init__(self, device_address, gyro_scale, accel_add, gyro_add, mag_add=None, accel_bias=None, gyro_bias=None,
                  mag_bias=None, *args: list[int, int, int]):
@@ -32,6 +30,8 @@ class IMU(object):
         :param mag_bias: the magnetometer bias
         :param args: miscellaneous setup addresses with device address and value
         """
+
+        self.BUS = smbus.SMBus(1)
         if accel_bias is None:
             accel_bias = [[1, 0], [1, 0], [1, 0]]
 
@@ -61,11 +61,16 @@ class IMU(object):
 
     def __read_sensor_data(self, device_address: int, addr: list[int, int]) -> int:
         """
-        Write data to an address on the bus
+        Read data from an address on the bus in 16 bit two's complement
+        :param device_address: the device to read from
+        :param addr: the high (MSB) and low (LSB) addresses for the reading
         """
         low = self.BUS.read_byte_data(device_address, addr[0])
         high = self.BUS.read_byte_data(device_address, addr[1])
-        # bitwise left shift high by 8 bits, then bitwise or on shifted high and low
+        # bitwise left shift msb/high by 8 bits, then bitwise or on shifted high and lsb/low
+        # combines low and high together
+        # eg high = abcdefgh, low = 12345678
+        # abcdefgh << 8 = 00000000abcdefgh => 00000000abcdefgh | 12345678 = 12345678abcdefgh
         value = (high << 8 | low)
         # wrap around overflow
         if value > 2 ** 16 / 2:
@@ -77,26 +82,26 @@ class IMU(object):
         Returns bearing value adjusted for declination based on GPS data.
         Will only return a value if magnetometer readings are available
         """
-        # todo
-        # lat, long = gps.get_coordinates()
-        lat = 56
-        long = -7
+        lat = gps.gps.location.latitude.degrees
+        long = gps.gps.location.longitude.degrees
 
         # rotate upside down as z axis is pointing up (to get positive clockwise angle using right hand rule)
         # rotate 180º as magnetometer is pointing opposite to antenna direction
-        bearing = self.z * -1 + 180
+        bearing = self.yaw * -1 + 180
 
         # convert to 0 to 360
         if bearing < 0:
             bearing += 360.0
-        if bearing > 360:
+        elif bearing > 360:
             bearing -= 360
 
         # add declination
         bearing += geomag.declination(lat, long)
 
         # check if value has overflowed and wrap around
-        if bearing > 360:
+        if bearing < 0:
+            bearing += 360.0
+        elif bearing > 360:
             bearing -= 360
 
         return bearing
@@ -108,7 +113,7 @@ class IMU(object):
         As satellite elevation is semicircular, there are two unique solutions for a given elevation after conversion
         """
 
-        y = self.y
+        y = self.pitch
 
         if y <= 0:
             y += 90
@@ -120,14 +125,74 @@ class IMU(object):
     def get_readings(self) -> tuple[float, float, float]:
         """
         Returns unadjusted, smoothed position data
+        :return array of floats for roll, pitch and yaw
         """
-        return self.x, self.y, self.z
+        return self.roll, self.pitch, self.yaw
+
+    def __get_raw_gyroscope(self) -> tuple[float, float, float]:
+        """
+        Get calibrated and scaled gyroscope readings
+        :return: the gyrscope readings
+        """
+        g_x = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[0]) + self.gyro_bias[
+            0]) * self.gyro_scale
+        g_y = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[1]) + self.gyro_bias[
+            1]) * self.gyro_scale
+        g_z = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[2]) + self.gyro_bias[
+            2]) * self.gyro_scale
+
+        return g_x, g_y, g_z
+
+    def __get_raw_roll_pitch(self) -> tuple[float, float]:
+        """
+        Get roll and pitch readings from calibrated accelerometer
+        :return: the roll and pitch
+        """
+        a_x = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0]),
+                                  *self.accel_bias[0])
+        a_y = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1]),
+                                *self.accel_bias[1])
+        a_z = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[2]),
+                                *self.accel_bias[2])
+
+        # rotation about x axis is limited to ±90º to allow unique solutions to be calculated
+        roll_x = np.degrees(np.arctan2(a_y, np.sqrt(a_x ** 2 + a_z ** 2)))
+        pitch_y = np.degrees(np.arctan2(-a_x, a_z))
+        return  roll_x, pitch_y
+
+    def __get_raw_yaw(self, kalman_x, kalman_y) -> float:
+        """
+        Get yaw value from calibrated magnetometer reading and filtered pitch and roll
+        :param kalman_x: the kalman filtered roll
+        :param kalman_y: the kalman filtered pitch
+        :return: the yaw
+        """
+        m_x = self.__read_sensor_data(self.mag_device_address, self.mag_add[0])
+        m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
+        m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
+
+        h = np.array([[m_x, m_y, m_z]]).T
+        h_unit_vec = np.matmul(self.mag_bias_a_inv, h - self.mag_bias_b)
+        cal_m_x = h_unit_vec[0][0]
+        cal_m_y = h_unit_vec[1][0]
+        cal_m_z = h_unit_vec[2][0]
+
+        yaw_y_component = cal_m_z * np.sin(np.radians(kalman_x)) - cal_m_y * np.cos(np.radians(kalman_x))
+        yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) \
+                          + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
+                          + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
+
+        yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
+
+        return yaw_z
+
 
     async def stream_readings(self, p) -> None:
         """
         Streams accelerometer and gyroscope data, and magnetometer if present. The data is filtered through a
-        Kalman filter to denoise the data
+        Kalman filter to correct drift denoise the data
         x, y and z values range from -180 to +180
+        :param p: the satellite rise and set time
         """
 
         # https://vinodembedded.wordpress.com/2021/03/29/how-to-interface-mpu6050-accelerometer-with-raspberry-pi-using-python/
@@ -139,108 +204,49 @@ class IMU(object):
 
         finish_time = p[2][0]
 
-        kalman_filter_x = kalman.KalmanFilter()
-        kalman_filter_z = kalman.KalmanFilter()
-        kalman_filter_y = kalman.KalmanFilter()
-
         kalman_x = 0
         kalman_y = 0
         kalman_z = 0
 
-        a_x = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0]),
-                                  *self.accel_bias[0])
-        a_y = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1]),
-                                  *self.accel_bias[1])
-        a_z = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[2]),
-                                  *self.accel_bias[2])
+        roll_x, pitch_y = self.__get_raw_roll_pitch()
 
         timer = time.perf_counter()
 
-        # rotation about x axis is limited to ±90º to allow unique solutions to be calculated
-        # roll_x = math.degrees(math.atan2(a_y, a_z))
-        # pitch_y = math.degrees(math.atan2(-a_x, math.sqrt((a_y ** 2) + (a_z ** 2))))
-        roll_x = np.degrees(np.arctan2(a_y, np.sqrt(a_x ** 2 + a_z ** 2)))
-        pitch_y = np.degrees(np.arctan2(-a_x, a_z))
+        kalman_filter_x = kalman.KalmanFilter(roll_x)
+        kalman_filter_y = kalman.KalmanFilter(pitch_y)
+        kalman_filter_z = None
 
         if self.mag_add is not None:
-            m_x = self.__read_sensor_data(self.mag_device_address, self.mag_add[0])
-            m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
-            m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
-
-            h = np.array([[m_x, m_y, m_z]]).T
-            h_unit_vec = np.matmul(self.mag_bias_a_inv, h - self.mag_bias_b)
-            cal_m_x = h_unit_vec[0][0]
-            cal_m_y = h_unit_vec[1][0]
-            cal_m_z = h_unit_vec[2][0]
-
-            yaw_y_component = cal_m_z * np.sin(np.radians(kalman_x)) - cal_m_y * np.cos(np.radians(kalman_x))
-            yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) \
-                              + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
-                              + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
-
-            yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
-
-            kalman_filter_z.set_angle(yaw_z)
-
-        kalman_filter_x.set_angle(roll_x)
-        kalman_filter_y.set_angle(pitch_y)
+            kalman_filter_z = kalman.KalmanFilter(self.__get_raw_yaw(roll_x, pitch_y))
 
         while True:
-            # todo
-            # if gps.get_time() > finish_time or not shared.running.value:
-            #     print('IMU stopped at ' + finish_time)
-            #     break
+            if gps.gps.time > finish_time or not shared.running.value:
+                print('IMU stopped at ' + str(finish_time))
+                break
 
-            a_x = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[0]),
-                                      *self.accel_bias[0])
-            a_y = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[1]),
-                                      *self.accel_bias[1])
-            a_z = self.__fit_acc_bias(self.__read_sensor_data(self.acc_gyro_device_address, self.accel_add[2]),
-                                      *self.accel_bias[2])
+            roll_x, pitch_y = self.__get_raw_roll_pitch()
 
-            g_x = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[0]) + self.gyro_bias[
-                0]) * self.gyro_scale
-            g_y = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[1]) + self.gyro_bias[
-                1]) * self.gyro_scale
-            g_z = (self.__read_sensor_data(self.acc_gyro_device_address, self.gyro_add[2]) + self.gyro_bias[
-                2]) * self.gyro_scale
+            g_x, g_y, g_z = self.__get_raw_gyroscope()
 
             dt = time.perf_counter() - timer
             timer = time.perf_counter()
 
-            # roll_x = math.degrees(math.atan2(a_y, a_z))
-            # pitch_y = math.degrees(math.atan(-a_x / math.sqrt((a_y ** 2) + (a_z ** 2))))
-            roll_x = np.degrees(np.arctan2(a_y, np.sqrt(a_x ** 2 + a_z ** 2)))
-            pitch_y = np.degrees(np.arctan2(-a_x, a_z))
-
             if self.mag_add is not None:
-                m_x = self.__read_sensor_data(self.mag_device_address, self.mag_add[0])
-                m_y = self.__read_sensor_data(self.mag_device_address, self.mag_add[1])
-                m_z = self.__read_sensor_data(self.mag_device_address, self.mag_add[2])
+                kalman_z = kalman_filter_z.get_angle(self.__get_raw_yaw(kalman_x, kalman_y), g_z, dt)
 
-                h = np.array([[m_x, m_y, m_z]]).T
-                h_unit_vec = np.matmul(self.mag_bias_a_inv, h - self.mag_bias_b)
-                cal_m_x = h_unit_vec[0][0]
-                cal_m_y = h_unit_vec[1][0]
-                cal_m_z = h_unit_vec[2][0]
-
-                yaw_y_component = cal_m_z * np.sin(np.radians(kalman_x)) - cal_m_y * np.cos(np.radians(kalman_x))
-                yaw_x_component = cal_m_x * np.cos(np.radians(kalman_y)) \
-                                  + cal_m_y * np.sin(np.radians(kalman_x)) * np.sin(np.radians(kalman_y)) \
-                                  + cal_m_z * np.cos(np.radians(kalman_x)) * np.sin(np.radians(kalman_y))
-
-                yaw_z = np.degrees(np.arctan2(yaw_y_component, yaw_x_component))
-
-                kalman_z = kalman_filter_z.get_angle(yaw_z, g_z, dt)
-
+            # reset kalman filter when value wraps around the 180º value
+            # as the kalman filter doesn't understand wrapping
             if (pitch_y < -90 and kalman_y > 90) or (pitch_y > 90 and kalman_y < -90):
                 kalman_filter_y.set_angle(pitch_y)
                 kalman_y = pitch_y
             else:
                 kalman_y = kalman_filter_y.get_angle(pitch_y, g_y, dt)
 
+            # if pitch is on upper quadrants of circle (ie not upside down), calculate roll
+            # restricts roll to ±90º
             if abs(kalman_y) < 90:
-                g_x = -g_x
+                # todo don't need to invert as imu not upside down
+                # g_x = -g_x
                 kalman_x = kalman_filter_x.get_angle(roll_x, g_x, dt)
 
             # reset roll if over 90 degrees
@@ -249,16 +255,17 @@ class IMU(object):
             elif kalman_x < -90:
                 kalman_x = -90
 
+            # ensure yaw is -180<=y<=180
             if kalman_z > 180:
                 kalman_z -= 360
             elif kalman_z < -180:
                 kalman_z += 360
 
-            self.x = kalman_x
-            self.y = kalman_y
-            self.z = kalman_z
+            self.roll = kalman_x
+            self.pitch = kalman_y
+            self.yaw = kalman_z
 
-            # print('x', round(kalman_x), 'y', round(kalman_y), 'z', round(kalman_z))
+            # print(self.roll, self.pitch, self.yaw)
 
             await asyncio.sleep(0.05)
 
@@ -296,7 +303,8 @@ class IMU(object):
         # https://makersportal.com/blog/calibration-of-an-inertial-measurement-unit-imu-with-raspberry-pi-part-ii
         bias = [[], [], []]
         axes = ['x', 'y', 'z']
-        directions = ["upward", "downward", "perpendicular"]  # direction for IMU cal
+        # direction for IMU calibration
+        directions = ["upward", "downward", "perpendicular"]
         for axis_index, axis in enumerate(axes):
             data = [[], [], []]
             for direction_index, direction in enumerate(directions):
@@ -320,13 +328,13 @@ class IMU(object):
 
     def calibrate_magnetometer_approximate(self) -> list[float, float, float]:
         """
-        Calibrate magnetometer approximately for hard iron effects to allow more precise calibration to be performed
+        Calibrate magnetometer approximately for hard iron effects
         https://ozzmaker.com/compass3/
         :return: an array of magnetometer biases
         """
         # magnetometer value is a signed 16 bit value
         limit = 2 ** 16 / 2
-        # arrays to store minimum and maximum values
+        # lists to store minimum and maximum values
         x_bias = [limit, -limit]
         y_bias = [limit, -limit]
         z_bias = [limit, -limit]
@@ -400,18 +408,20 @@ class IMU(object):
         m_z = np.array(m_z)
 
         # create Xi matrix
-        a1 = m_x ** 2
-        a2 = m_y ** 2
-        a3 = m_z ** 2
-        a4 = 2 * np.multiply(m_y, m_z)
-        a5 = 2 * np.multiply(m_x, m_z)
-        a6 = 2 * np.multiply(m_x, m_y)
-        a7 = 2 * m_x
-        a8 = 2 * m_y
-        a9 = 2 * m_z
-        a10 = np.ones(len(m_x)).T
-        d = np.array([a1, a2, a3, a4, a5, a6, a7, a8, a9, a10])
+        x1 = m_x ** 2
+        x2 = m_y ** 2
+        x3 = m_z ** 2
+        x4 = 2 * (m_y * m_z)
+        x5 = 2 * (m_x * m_z)
+        x6 = 2 * (m_x * m_y)
+        x7 = 2 * m_x
+        x8 = 2 * m_y
+        x9 = 2 * m_z
+        x10 = np.ones(len(m_x)).T
+        d = np.array([x1, x2, x3, x4, x5, x6, x7, x8, x9, x10])
 
+        # k = 4 for ellipsoids that are at least half as wide as they are tall
+        # for values of k != 4, the same paper shows how an iterative method can be used to find k
         k = 4
         z = k / 2 - 1
 
@@ -431,27 +441,29 @@ class IMU(object):
         s22 = s[6:, 6:]
 
         # Equation 15
-        tmp = np.matmul(np.linalg.inv(c1), s11 - np.matmul(s12, np.matmul(np.linalg.inv(s22), s12.T)))
+        lhs = np.matmul(np.linalg.inv(c1), s11 - np.matmul(s12, np.matmul(np.linalg.inv(s22), s12.T)))
 
         # Get eigenvector of largest eigenvalue
-        e_val, e_vect = np.linalg.eig(tmp)
-        u1 = e_vect[:, np.argmax(e_val)]
+        e_val, e_vect = np.linalg.eig(lhs)
+        v1 = e_vect[:, np.argmax(e_val)]
 
         # Equation 13
-        u2 = np.matmul(-np.matmul(np.linalg.inv(s22), s21), u1)
+        v2 = np.matmul(-np.matmul(np.linalg.inv(s22), s21), v1)
 
-        # Get
-        u = np.concatenate([u1, u2]).T
+        # Right eigenvector (column) to left eigenvector (row)
+        u = np.concatenate([v1, v2]).T
 
-        # A * A^-1
+        # A * A^-1 - First term of quadric form
         q = np.array([[u[0], u[5], u[4]],
                       [u[5], u[1], u[3]],
                       [u[4], u[3], u[2]]])
 
+        # Second term of quadric form
         n = np.array([[u[6]],
                       [u[7]],
                       [u[8]]])
 
+        # Third term of quadric form
         d = u[9]
 
         q_inv = np.linalg.inv(q)
