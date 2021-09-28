@@ -1,68 +1,89 @@
 # https://blog.tkjelectronics.dk/2012/09/a-practical-approach-to-kalman-filter-and-how-to-implement-it/
 
 class KalmanFilter:
-    # process noise - accelerometer variance
+    """Kalman filter object to predict the state an angle"""
+    # Process noise - accelerometer variance
     Q_ANGLE = 0.001
-    # process noise - bias variance
+    # Process noise - bias variance
     Q_GYRO_BIAS = 0.003
-    # measurement noise
+    # Measurement noise
     R_MEASURE = 0.03
 
-    def __init__(self, angle):
+    def __init__(self, angle: float):
+        """Initialise a Kalman filter with an initial angle
+
+        The initial angle reduces the settling time of the filtered angle
+        :param angle: The initial angle
+        """
         if not isinstance(angle, (float, int)):
             raise TypeError
-        # angle
-        self.angle = angle
-        # bias
-        self.bias = 0.0
-        # angular velocity from gyro - unbiased rate
-        self.ang_vel = 0.0
-        # error covariance matrix
-        self.p = [[0.0, 0.0], [0.0, 0.0]]
+        # Angle
+        self._angle = angle
+        # Bias
+        self._bias = 0.0
+        # Angular velocity from gyroscope (unbiased rate)
+        self._angular_velocity = 0.0
+        # Error covariance matrix
+        self._p = [[0.0, 0.0], [0.0, 0.0]]
 
-    def set_angle(self, angle):
-        self.angle = angle
+    def set_angle(self, angle: float) -> None:
+        """Set Kalman angle
+
+        Resets the Kalman filtered angle
+        :param angle: The angle to set
+        :return: None
+        """
+        self._angle = angle
 
 
-    def get_angle(self, new_angle, new_ang_vel, dt):
+    def get_angle(self, new_angle: float, new_ang_vel: float, dt: float) -> float:
+        """Get Kalman angle
+
+        Get the Kalman filtered angle
+        :param new_angle: The current angle
+        :param new_ang_vel: The current angular velocity
+        :param dt: The time difference since the last update
+        :return: The filtered angle
+        """
         if not isinstance(new_angle, (float, int)) \
                 or not isinstance(new_ang_vel, (float, int)) \
                 or not isinstance(dt, (float, int)):
             raise TypeError
-        # predict state
-        self.ang_vel = new_ang_vel - self.bias
-        # sum with integral of predicted rate (ie change in angle)
-        self.angle += dt * self.ang_vel
 
-        # predict error covariance matrix based on previous
-        self.p[0][0] += dt * (dt * self.p[1][1] - self.p[0][1] - self.p[1][0] + self.Q_ANGLE)
-        self.p[0][1] -= dt * self.p[1][1]
-        self.p[1][0] -= dt * self.p[1][1]
-        self.p[1][1] += dt * self.Q_GYRO_BIAS
+        # Predict state
+        self._angular_velocity = new_ang_vel - self._bias
+        # Sum with integral of predicted rate (ie change in angle)
+        self._angle += dt * self._angular_velocity
 
-        # calculate innovation, the difference between the measurement and the predicted state
-        y = new_angle - self.angle
+        # Predict error covariance matrix based on previous
+        self._p[0][0] += dt * (dt * self._p[1][1] - self._p[0][1] - self._p[1][0] + self.Q_ANGLE)
+        self._p[0][1] -= dt * self._p[1][1]
+        self._p[1][0] -= dt * self._p[1][1]
+        self._p[1][1] += dt * self.Q_GYRO_BIAS
 
-        # calculate innovation covariance
-        # prediction of the confidence in measurement based on predicted error covariance matrix
-        s = self.p[0][0] + self.R_MEASURE
+        # Calculate innovation, the difference between the measurement and the predicted state
+        y = new_angle - self._angle
 
-        # calculate kalman gain, prediction of the confidence in innovation
+        # Calculate innovation covariance
+        # Prediction of the confidence in measurement based on predicted error covariance matrix
+        s = self._p[0][0] + self.R_MEASURE
+
+        # Calculate kalman gain, prediction of the confidence in innovation
         k = [0, 0]
-        k[0] = self.p[0][0] / s
-        k[1] = self.p[1][0] / s
+        k[0] = self._p[0][0] / s
+        k[1] = self._p[1][0] / s
 
-        # update estimate of current state
-        self.angle += k[0] * y
-        self.bias += k[1] * y
+        # Update estimate of current state
+        self._angle += k[0] * y
+        self._bias += k[1] * y
 
-        p00_orig = self.p[0][0]
-        p01_orig = self.p[0][1]
+        p00_orig = self._p[0][0]
+        p01_orig = self._p[0][1]
 
-        # decrease error covariance matrix, as the error of the estimate of the state decreased.
-        self.p[0][0] -= k[0] * p00_orig
-        self.p[0][1] -= k[0] * p01_orig
-        self.p[1][0] -= k[1] * p00_orig
-        self.p[1][1] -= k[1] * p01_orig
+        # Decrease error covariance matrix, as the error of the estimate of the state decreased.
+        self._p[0][0] -= k[0] * p00_orig
+        self._p[0][1] -= k[0] * p01_orig
+        self._p[1][0] -= k[1] * p00_orig
+        self._p[1][1] -= k[1] * p01_orig
 
-        return self.angle
+        return self._angle

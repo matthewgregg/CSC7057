@@ -1,7 +1,6 @@
 import jinja2
 import aiohttp_jinja2
 import skyfield
-from RPi import GPIO
 from aiohttp import web
 import asyncio
 import os.path
@@ -24,24 +23,24 @@ import imu
 MINIMUM_PASS_ANGLE = 30.0
 
 class WebInterface(Dispatcher):
-    value = Property()
+    running_value = Property()
 
     async def load_stop_web_interface(self, request):
-        """
-        Loads the stopped web interface
+        """Loads the stopped web interface
+
         :param request: The HTTP request
         :return: The HTML template to be displayed
         """
         data = {
             'running': 0,
         }
-        self.value = False
+        self.running_value = False
         return aiohttp_jinja2.render_template('index.html', request, data)
 
 
     async def load_start_web_interface(self, request):
-        """
-        Loads the started web interface
+        """Loads the started web interface
+
         :param request: The HTTP request
         :return: The HTML template to be displayed
         """
@@ -52,7 +51,7 @@ class WebInterface(Dispatcher):
         rise_time = dt.isoformat(p[0][0])
         set_time = dt.isoformat(p[2][0])
         if sdr_error == 0:
-            self.value = True
+            self.running_value = True
         data = {
             'running': 1,
             'satellite': sat_name,
@@ -61,18 +60,18 @@ class WebInterface(Dispatcher):
             'sdrerror': sdr_error
         }
         if shared.running.value and not shared.waiting.value:
-            self.value = False
+            self.running_value = False
             data['redirect'] = True
 
         return aiohttp_jinja2.render_template('index.html', request, data)
 
 
 def get_frequency(satellite: sgp4lib.EarthSatellite) -> int:
-    """
+    """Get the frequency for a satellite
+
     Get the nominal APT frequency of a NOAA satellite
     :param satellite: The satellite to get the nominal frequency of
     :return: The nominal APT frequency
-    :rtype: int
     """
     if satellite.name == 'NOAA 15 [B]':
         return int(137620000)
@@ -85,10 +84,11 @@ def get_frequency(satellite: sgp4lib.EarthSatellite) -> int:
 
 
 def get_doppler_shift(satellite: sgp4lib.EarthSatellite) -> float:
-    """
+    """Calculates Doppler shift
+
     Calculates the Doppler shift based on the range rate of a satellite
     :param satellite: The satellite to calculate the Doppler shift for
-    :type satellite: skyfield.sgp4lib.EarthSatellite
+    :return: The Doppler shifted frequency
     """
     t = load.timescale().now()
     pos = (satellite - gps.gps.location).at(t)
@@ -96,58 +96,56 @@ def get_doppler_shift(satellite: sgp4lib.EarthSatellite) -> float:
     return range_rate.m_per_s / constants.c * get_frequency(satellite)
 
 
-def check_tle_epoch(file) -> bool:
-    """
-    Checks whether the Two Line Element Set is outdated
+def check_tle_epoch(filename: str) -> bool:
+    """Checks if TLE is outdated
+
+    Checks whether the Two Line Element Set is outdated by parsing its date
     :return: False if outdated
     """
-    tle_outdated = False
-    if os.path.exists(file):
-        with open(file, "r+") as r:
+    if os.path.exists(filename):
+        with open(filename, "r+") as r:
             line = r.readlines()
             tle_year = int(line[1][18:20])
+            # TLE year is 2 digits from 1957-2056
             tle_year += (1900 if tle_year >= 57 <= 99 else 2000)
             tle_day = float(line[1][20:32])
             tle_date = (dt(tle_year, 1, 1) + timedelta(tle_day - 1)).replace(tzinfo=timezone.utc)
             tle_outdated = (gps.gps.time - tle_date).total_seconds() > 7 * 24 * 3600
 
-
-    if not os.path.exists(file) or tle_outdated:
+    if not os.path.exists(filename) or tle_outdated:
         return False
-    else:
-        return True
+
+    return True
 
 
-def update_tle(file) -> None:
-    """
-    Updates TLE file
-    :param file: the filename of the TLE file
+def update_tle(filename: str) -> None:
+    """Updates TLE file
+
+    :param filename: the filename of the TLE file
     :return: None
     """
-    import http.client as http
-    conn = http.HTTPConnection("www.celestrak.com", timeout=5)
+    import requests
     try:
-        conn.request("HEAD", "/")
-        import requests
         noaa = requests.get('https://celestrak.com/NORAD/elements/noaa.txt')
-        f = open(file, 'wb')
+        f = open(filename, 'wb')
         f.write(noaa.content)
         f.close()
-    except:
+    except requests.ConnectionError:
         print('Could\'t download TLE sets. Will try again next time.')
         pass
 
-    conn.close()
 
-def read_in_config(file) -> tuple[imu.IMU, motor.Motor, motor.Motor]:
-    """
+def read_in_config(filename: str) -> tuple[imu.IMU, motor.Motor, motor.Motor]:
+    """Read in IMU and motor configuration
+
     Reads in configuration file containing IMU registers and biases and motor pins and gear ratios
-    :param file: the configuration file
-    :return: an imu object and two motor objects
+    :param filename: The name of the configuration file
+    :return: An imu object and two motor objects
     """
-    config = json.load(open(file, 'r'))
+    config = json.load(open(filename, 'r'))
     bus = smbus.SMBus(1)
     devices_found = []
+    # Get devices on i2c
     for device in range(128):
         try:
             bus.read_byte(device)
@@ -160,6 +158,8 @@ def read_in_config(file) -> tuple[imu.IMU, motor.Motor, motor.Motor]:
     device_address = [0, 0]
     accelerometer = None
     magnetometer = None
+
+    # Match i2c devices to devices in configuration file
     for i in devices_found:
         str_add = str(int(i, 0))
         if str_add in accelerometers:
@@ -169,6 +169,9 @@ def read_in_config(file) -> tuple[imu.IMU, motor.Motor, motor.Motor]:
             device_address[1] = int(i, 0)
             magnetometer = magnetometers[str_add]
 
+    if accelerometer is None:
+        raise ValueError("Accelerometer not found")
+
     acc_setup = accelerometer['setup']
     acc_registers = accelerometer['accreg']
     gyro_registers = accelerometer['gyroreg']
@@ -176,7 +179,7 @@ def read_in_config(file) -> tuple[imu.IMU, motor.Motor, motor.Motor]:
     acc_bias = accelerometer['accbias']
     gyro_bias = accelerometer['gyrobias']
 
-    # prepend device address to each register and join arrays
+    # Prepend device address to each register
     setup = np.column_stack((np.full((len(acc_setup), 1), device_address[0]), acc_setup))
 
     if magnetometer is not None:
@@ -196,15 +199,15 @@ def read_in_config(file) -> tuple[imu.IMU, motor.Motor, motor.Motor]:
                    mag_bias, *setup)
 
     motors = config['motors']
-    elevation_motor2 = motor.Motor(motors['elevation'], motors['elevationratio'])
-    azimuth_motor2 = motor.Motor(motors['azimuth'], motors['azimuthratio'])
+    elevation_motor2 = motor.Motor(motors['elevation'], motors['elevationratio'], motors['elevationmax'])
+    azimuth_motor2 = motor.Motor(motors['azimuth'], motors['azimuthratio'], motors['azimuthmax'])
 
     return imu2, elevation_motor2, azimuth_motor2
 
 
 def get_passes(satellite: sgp4lib.EarthSatellite, min_elevation: float) -> list:
-    """
-    Gets all upcoming passes for a satellite
+    """Gets all upcoming passes for a satellite
+
     :param satellite: The satellite to get passes for
     :param min_elevation: The minimum elevation of the satellite
     :return: A list of satellite rise and set times
@@ -218,22 +221,22 @@ def get_passes(satellite: sgp4lib.EarthSatellite, min_elevation: float) -> list:
     passes = []
     for time, event in zip(t, events):
         pos = (satellite - gps.gps.location).at(time)
-        (alt, _, _) = pos.altaz()
+        (elevation, _, _) = pos.altaz()
         time = dt.strptime(sftime.Time.utc_iso(time), "%Y-%m-%dT%H:%M:%S%z")
-        # event 1 is the elevation peak
-        # removes satellites with multiple elevation peaks
+        # Event 1 is the elevation peak
+        # Removes satellites with multiple elevation peaks
         if event == 1 and len(passes) > 1 and passes[-1][1] == 1:
             if passes[-1][0] < time:
-                passes[-1] = (time, event, alt)
+                passes[-1] = (time, event, elevation)
         else:
-            passes.append((time, event, alt))
+            passes.append((time, event, elevation))
     passes = np.array_split(passes, int(len(passes) / 3))
     return passes
 
 
 def get_next_pass(min_elevation: float) -> tuple[sgp4lib.EarthSatellite, list]:
-    """
-    Gets the next NOAA pass
+    """Get the next NOAA pass
+
     :param min_elevation: The minimum elevation
     :return: A tuple of the upcoming satellite and its rise and set times
     """
@@ -244,7 +247,7 @@ def get_next_pass(min_elevation: float) -> tuple[sgp4lib.EarthSatellite, list]:
     noaa_19 = by_name['NOAA 19 [+]']
     sats = [noaa_15, noaa_18, noaa_19]
 
-    # restrict to satellite elevation range
+    # Restrict to satellite elevation range
     if min_elevation < 0:
         min_elevation = 0
     elif min_elevation > 90:
@@ -262,23 +265,22 @@ def get_next_pass(min_elevation: float) -> tuple[sgp4lib.EarthSatellite, list]:
         peak = 1
         setting = 2
         time = 0
-        alt = 2
+        elevation = 2
 
         if next_pass[rise][time] < closest[1][rise][time]:
             if next_pass[rise][time] < closest[1][setting][time]:
                 closest = (s, next_pass)
-            # if setting time overlaps with rise time of next, take the one with the highest peak elevation
-            elif closest[1][peak][alt] > next_pass[peak][alt]:
+            # If set time overlaps with rise time of next, take the one with the highest peak elevation
+            elif closest[1][peak][elevation] > next_pass[peak][elevation]:
                 closest = (s, next_pass)
     return closest
 
 
 def get_satellite_data(satellite: skyfield.sgp4lib.EarthSatellite) -> None:
-    """
-    Prints relevant live data about a satellite
+    """Prints relevant live data about a satellite
+
     :param satellite: the satellite to print the data for
-    :rtype: None
-    :type satellite: skyfield.sgp4lib.EarthSatellite
+    :return: None
     """
 
     ts = load.timescale()
@@ -290,34 +292,34 @@ def get_satellite_data(satellite: skyfield.sgp4lib.EarthSatellite) -> None:
     print('Longitude:', subpoint.longitude)
     print('Height: {:.1f} km'.format(subpoint.antenna_elevation.km))
     pos = (satellite - gps.gps.location).at(t)
-    alt, az, distance = pos.altaz()
-    print('Altitude:', alt)
-    print('Azimuth:', az)
+    elevation, azimuth, distance = pos.altaz()
+    print('Elevation/Altitude:', elevation)
+    print('Azimuth:', azimuth)
     print('Distance: {:.1f} km'.format(distance.km))
     (_, _, sat_range, _, _, range_rate) = pos.frame_latlon_and_rates(gps.gps.location)
     print('Range: {:.1f} km'.format(sat_range.km))
     print('Range rate: {:.4f} km/s'.format(range_rate.km_per_s))
 
 
-async def stream_decode_signal(s: sgp4lib.EarthSatellite, p: list) -> None:
-    """
-    Streams samples from RTL-SDR and decodes them
-    :param s: The current satellite
-    :param p: The rise and set times for the current satellite
+async def stream_decode_signal(satellite: sgp4lib.EarthSatellite, passes: list) -> None:
+    """Streams samples from RTL-SDR and passes them to APT object
+
+    :param satellite: The current satellite
+    :param passes: The rise and set times for the current satellite
     :return: None
     """
-
     filter_type = shared.filter_type
     print('Streaming started with filter ' + str(filter_type))
 
     if filter_type == 'grayscale':
         filter_type = None
 
-    image = apt.APT(s.name, filter_type)
-    finish_time = p[2][0]
+    image = apt.APT(satellite.name, filter_type)
+    finish_time = passes[2][0]
     sample_rate = sdr.sample_rate
-    # samples should be multiple of 512
-    async for samples in sdr.stream(((sample_rate * 5) // 512) * 512):
+    time = 5
+    # Samples should be multiple of 512
+    async for samples in sdr.stream(((sample_rate * time) // 512) * 512):
         if gps.gps.time > finish_time or not shared.running.value:
             print('Streaming stopped at ' + finish_time)
             sdr.stop()
@@ -326,63 +328,65 @@ async def stream_decode_signal(s: sgp4lib.EarthSatellite, p: list) -> None:
         image.export_image('media/image.png')
 
 
-
 async def set_frequency(satellite: sgp4lib.EarthSatellite) -> None:
-    """
-    Sets the Doppler shifted frequency for a satellite
+    """Set the Doppler shifted frequency for a satellite
+
     :param satellite: The  currently tracked satellite
     :return: None
     """
-    sdr.center_freq = int(get_frequency(satellite) + get_doppler_shift(satellite))
+    frequency = int(get_frequency(satellite) + get_doppler_shift(satellite))
+    print('frequency set to ' + str(frequency))
+    sdr.center_freq = frequency
 
 
-def signal_to_noise(s: np.ndarray, axis: int = 0) -> np.ndarray:
-    """
-    Calculates SNR for a signal
-    :param s: the signal
+def signal_to_noise(signal: np.ndarray, axis: int = 0) -> np.ndarray:
+    """Calculates SNR for a signal
+
+    :param signal: the signal
     :param axis: the axis to calculate the standard deviation along
     :return: the SNR
     """
-    mx = np.amax(s)
-    s = np.divide(s, mx)
-    s = np.square(s)
-    s = np.asanyarray(s)
-    m = s.mean(axis)
-    sd = s.std(axis=axis)
+    mx = np.amax(signal)
+    signal = np.divide(signal, mx)
+    signal = np.square(signal)
+    signal = np.asanyarray(signal)
+    m = signal.mean(axis)
+    sd = signal.std(axis=axis)
     return np.where(sd == 0, 0, m / sd)
 
 
-async def motor_controller(s: sgp4lib.EarthSatellite, p: list) -> None:
-    """
-    Control motor position to follow a satellite at a particular time
-    :param s: the satellite to track
-    :param p: the rise and set time for the satellite
+async def motor_controller(satellite: sgp4lib.EarthSatellite, passes: list) -> None:
+    """Track a satellite by rotating motors
+
+    Adjust elevation and azimuth motor position to follow a satellite
+    :param satellite: the satellite to track
+    :param passes: the rise and set time for the satellite
     :return: None
     """
-    print('motors starting')
-    finish_time = p[2][0]
-    # wait for accelerometer data
+    print('Motors starting')
+    finish_time = passes[2][0]
+    # Wait for accelerometer data
     await asyncio.sleep(1)
     while True:
         _, antenna_elevation, _ = imu.get_readings()
         antenna_azimuth = imu.get_bearing()
         if gps.gps.time > finish_time or not shared.running.value:
-            print('motor stopped')
-            print('resetting elevation motor')
+            print('Motor stopped')
+            print('Resetting elevation motor')
             elevation_angle_delta = (90 - antenna_elevation)
-            print('moving', 90 - antenna_elevation)
+            print('Moving', 90 - antenna_elevation)
             await elevation_motor.rotate(elevation_angle_delta, 0)
             break
         ts = load.timescale()
         utc = gps.gps.time
         t = ts.utc(utc.year, utc.month, utc.day, utc.hour, utc.minute, utc.second)
-        pos = (s - gps.gps.location).at(t)
+        pos = (satellite - gps.gps.location).at(t)
         sat_elevation, sat_azimuth, _ = pos.altaz()
 
         sat_elevation = abs(sat_elevation.degrees)
         sat_azimuth = sat_azimuth.degrees
 
-        # convert satellite azimuth (0,+90,0,-90) to accelerometer (-90,0,+90,±180)
+        # Convert satellite azimuth (0,+90,0,-90) to accelerometer (-90,0,+90,±180)
         if sat_elevation < 0:
             sat_elevation += 90
         else:
@@ -409,27 +413,32 @@ async def motor_controller(s: sgp4lib.EarthSatellite, p: list) -> None:
         )
 
 
-async def doppler_task_controller(s: sgp4lib.EarthSatellite, p: list) -> None:
-    """
+async def doppler_task_controller(satellite: sgp4lib.EarthSatellite, passes: list) -> None:
+    """Adjusts SDR frequency every 10 seconds
+
     Adjusts frequency of RTL-SDR based on the Doppler shift of the satellite every 10 seconds
-    :param s: The satellite to adjust the frequency for
-    :param p: The rise and set times for the satellite
+    :param satellite: The satellite to adjust the frequency for
+    :param passes: The rise and set times for the satellite
     :return: None
     """
     print('Doppler adjustment started')
-    finish_time = p[2][0]
+    finish_time = passes[2][0]
     while True:
         if gps.gps.time > finish_time or not shared.running.value:
             print('Doppler adjustment stopped')
             break
         await asyncio.gather(
             asyncio.sleep(10),
-            set_frequency(s)
+            set_frequency(satellite)
         )
 
 
 async def wait_for_pass() -> tuple[sgp4lib.EarthSatellite, list]:
-    print('waiting for pass')
+    """Finds the next satellite and waits until it's rise time
+
+    :return: The next satellite and its rise and set times
+    """
+    print('Waiting for pass')
     shared.waiting.value = True
     s, p = get_next_pass(MINIMUM_PASS_ANGLE)
     while p[0][0] > gps.gps.time:
@@ -441,32 +450,49 @@ async def wait_for_pass() -> tuple[sgp4lib.EarthSatellite, list]:
 
 
 async def task_listener() -> None:
+    """Listens for Property state change
+
+    Listens for the state of the Property to change in WebInterface() and updates the value in the class Running()
+    :return: None
+    """
     while True:
-        (_, shared.running.value), _ = await event
-        print('running val changed to ', shared.running.value)
+        (_, shared.running.value), _ = await running_event
+        print('Running value changed to ', shared.running.value)
 
 
 async def task_dispatcher() -> None:
+    """Launches coroutines when tracking begins
+
+    :return: None
+    """
     while True:
-        (_, value), _ = await event
-        if value:
-            # set running value in case this method is triggered first
+        (_, running_val), _ = await running_event
+        if running_val:
+            # Set running value in case this method is triggered first
             shared.running.value = True
-            # TODO revert this when not testing
-            s, p = get_next_pass(MINIMUM_PASS_ANGLE)#await wait_for_pass()
+            # sat,passes = get_next_pass(MINIMUM_PASS_ANGLE)
+            sat, passes = await wait_for_pass()
             if shared.running.value:
 
-                coro = [stream_decode_signal(s, p),
-                        doppler_task_controller(s, p),
-                        motor_controller(s, p),
-                        imu.stream_readings(p)]
-                await asyncio.gather(*coro, return_exceptions=True)
-            print('done')
+                coroutines = [stream_decode_signal(sat, passes),
+                        doppler_task_controller(sat, passes),
+                        motor_controller(sat, passes),
+                        imu.stream_readings(passes)]
+                await asyncio.gather(*coroutines, return_exceptions=True)
+            print('Done')
             if os.path.exists('media/image.png'):
                 os.rename('media/image.png', 'media/previous/' + str(gps.gps.time) + '.png')
 
 
 async def background_task_setup(app) -> None:
+    """Run task_listener() and task_dispatcher()
+
+    Runs task_listener() and task_dispatcher() asynchronously. As task_listener() controls the state of Running,
+    the value can be updated independently of task_dispatcher(), allowing it to be cancelled
+    :param app: The asyncio web server application. Required to attach to asyncio background tasks
+    :return: None
+    """
+    print(type(app))
     asyncio.create_task(task_listener())
     asyncio.create_task(task_dispatcher())
 
@@ -485,7 +511,7 @@ if __name__ == '__main__':
         sdr_error = 1
 
     emitter = WebInterface()
-    event = emitter.get_dispatcher_event('value')
+    running_event = emitter.get_dispatcher_event('running_value')
     app = web.Application()
     app.on_startup.append(background_task_setup)
     app.add_routes([web.get('/', emitter.load_stop_web_interface)])
