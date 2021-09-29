@@ -1,7 +1,8 @@
-# https://blog.tkjelectronics.dk/2012/09/a-practical-approach-to-kalman-filter-and-how-to-implement-it/
-
 class KalmanFilter:
-    """Kalman filter object to predict the state an angle"""
+    """
+    Kalman filter object to predict the state an angle
+    https://blog.tkjelectronics.dk/2012/09/a-practical-approach-to-kalman-filter-and-how-to-implement-it/
+    """
     # Process noise - accelerometer variance
     Q_ANGLE = 0.001
     # Process noise - bias variance

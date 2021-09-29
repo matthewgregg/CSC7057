@@ -14,7 +14,7 @@ import shared
 class IMU(object):
     """IMU object to calculate orientation from sensors"""
 
-    def __init__(self, device_address: list, gyro_scale: float, accel_address:list, gyro_address:list, mag_address:list = None,
+    def __init__(self, device_address: Union[list, int], gyro_scale: float, accel_address:list, gyro_address:list, mag_address:list = None,
                  accel_bias:list = None, gyro_bias:list = None, mag_bias = None, *args: list[int, int, int]):
         """Initialise IMU using accelerometer and (optionally) magnetometer addresses
 
@@ -30,9 +30,9 @@ class IMU(object):
         """
 
         self._bus = smbus.SMBus(1)
-        self.roll = 0
-        self.pitch = 0
-        self.yaw = 0
+        self._roll = 0
+        self._pitch = 0
+        self._yaw = 0
 
         if accel_bias is None:
             accel_bias = [[1, 0], [1, 0], [1, 0]]
@@ -61,6 +61,21 @@ class IMU(object):
         for value in args:
             self._bus.write_byte_data(value[0], value[1], value[2])
 
+    @property
+    def roll(self) -> float:
+        """Returns the roll"""
+        return self._roll
+
+    @property
+    def pitch(self) -> float:
+        """Returns the pitch"""
+        return self._pitch
+
+    @property
+    def yaw(self) -> float:
+        """Returns the yaw"""
+        return self._yaw
+
     def __read_sensor_data(self, device_address: list, address: list[int, int]) -> int:
         """Read data from an address
 
@@ -80,7 +95,8 @@ class IMU(object):
             value = value - 2 ** 16
         return value
 
-    def get_bearing(self) -> float:
+    @property
+    def bearing(self) -> float:
         """Gets the current bearing
 
         Returns bearing value adjusted for declination based on GPS data.
@@ -91,7 +107,7 @@ class IMU(object):
 
         # Rotate upside down as z axis is pointing up (to get positive clockwise angle using right hand rule)
         # Rotate 180º as magnetometer is pointing opposite to antenna direction
-        bearing = self.yaw * -1 + 180
+        bearing = self._yaw * -1 + 180
 
         # Convert to 0 to 360
         if bearing < 0:
@@ -110,7 +126,8 @@ class IMU(object):
 
         return bearing
 
-    def get_adjusted_elevation(self) -> float:
+    @property
+    def adjusted_elevation(self) -> float:
         """Gets the satellite adjusted elevation value
 
         Returns elevation adjusted to match satellite elevation values of ±90º,
@@ -118,7 +135,7 @@ class IMU(object):
         As satellite elevation is semicircular, there are two unique solutions for a given elevation after conversion
         """
 
-        y = self.pitch
+        y = self._pitch
 
         if y <= 0:
             y += 90
@@ -127,13 +144,14 @@ class IMU(object):
 
         return y
 
-    def get_readings(self) -> tuple[float, float, float]:
+    @property
+    def readings(self) -> tuple[float, float, float]:
         """Get the current roll, pitch and yaw
 
         Returns unadjusted, smoothed position data
         :return array of floats for roll, pitch and yaw
         """
-        return self.roll, self.pitch, self.yaw
+        return self._roll, self._pitch, self._yaw
 
     def __get_raw_gyroscope(self) -> tuple[float, float, float]:
         """Get gyroscope readings
@@ -241,10 +259,15 @@ class IMU(object):
             timer = time.perf_counter()
 
             if self._mag_address is not None:
-                kalman_z = kalman_filter_z.get_angle(self.__get_raw_yaw(kalman_x, kalman_y), g_z, dt)
+                yaw_z = self.__get_raw_yaw(kalman_x, kalman_y)
+                # Reset kalman filter when value wraps around the 180º value as the kalman filter doesn't
+                # understand wrapping
+                if (yaw_z < -90 and kalman_z > 90) or (yaw_z > 90 and kalman_z < -90):
+                    kalman_filter_z.set_angle(yaw_z)
+                    kalman_z = yaw_z
+                else:
+                    kalman_z = kalman_filter_z.get_angle(yaw_z, g_z, dt)
 
-            # Reset kalman filter when value wraps around the 180º value
-            # as the kalman filter doesn't understand wrapping
             if (pitch_y < -90 and kalman_y > 90) or (pitch_y > 90 and kalman_y < -90):
                 kalman_filter_y.set_angle(pitch_y)
                 kalman_y = pitch_y
@@ -268,9 +291,9 @@ class IMU(object):
             elif kalman_z < -180:
                 kalman_z += 360
 
-            self.roll = kalman_x
-            self.pitch = kalman_y
-            self.yaw = kalman_z
+            self._roll = kalman_x
+            self._pitch = kalman_y
+            self._yaw = kalman_z
 
             # print(self.roll, self.pitch, self.yaw)
 

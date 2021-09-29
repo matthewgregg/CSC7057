@@ -14,7 +14,7 @@ class GPS(object):
     def __init__(self):
         """Initialise GPS object with data from GPS receiver
 
-        For performance, GPS data is only polled at instantiation
+        For performance, GPS data is only polled at initialisation
         """
         gps_socket = gps3.GPSDSocket()
         data_stream = gps3.DataStream()
@@ -46,14 +46,16 @@ class GPS(object):
     def location(self) -> skyfield.toposlib.GeographicPosition:
         """
         Gets the current location
+
+        :return: The current location
         """
         return wgs84.latlon(self._lat, self._long)
 
     @property
     def time(self) -> datetime.datetime:
-        """
-        Calculates the current time by offsetting a stored GPS epoch
-        :return:
+        """Calculates the current time by offsetting a stored GPS epoch
+
+        :return: The current datetime
         """
         if self.DEBUG_MODE:
             return dt.now(timezone.utc)

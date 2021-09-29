@@ -17,7 +17,7 @@ class APT(object):
     B_OFFSET = A_OFFSET + SYNC + SPACE
     TELE_LENGTH = 128
 
-    def __init__(self, sat_name: sgp4lib.EarthSatellite, apt_filter: str = None):
+    def __init__(self, sat_name: str, apt_filter: str = None):
         """Decodes and stores APT data from a satellite
 
         :param sat_name: The name of the satellite

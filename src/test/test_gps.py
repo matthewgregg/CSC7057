@@ -1,3 +1,5 @@
+import time
+
 from datetime import datetime as dt, timezone
 from unittest import TestCase
 import gps

@@ -1,3 +1,4 @@
+import aiohttp.web_app
 import jinja2
 import aiohttp_jinja2
 import skyfield
@@ -368,14 +369,13 @@ async def motor_controller(satellite: sgp4lib.EarthSatellite, passes: list) -> N
     # Wait for accelerometer data
     await asyncio.sleep(1)
     while True:
-        _, antenna_elevation, _ = imu.get_readings()
-        antenna_azimuth = imu.get_bearing()
+        _, antenna_elevation, _ = imu.readings
+        antenna_azimuth = imu.bearing
         if gps.gps.time > finish_time or not shared.running.value:
             print('Motor stopped')
             print('Resetting elevation motor')
-            elevation_angle_delta = (90 - antenna_elevation)
-            print('Moving', 90 - antenna_elevation)
-            await elevation_motor.rotate(elevation_angle_delta, 0)
+            print('Moving', antenna_elevation)
+            await elevation_motor.rotate(antenna_elevation, 0)
             break
         ts = load.timescale()
         utc = gps.gps.time
@@ -470,8 +470,8 @@ async def task_dispatcher() -> None:
         if running_val:
             # Set running value in case this method is triggered first
             shared.running.value = True
-            # sat,passes = get_next_pass(MINIMUM_PASS_ANGLE)
-            sat, passes = await wait_for_pass()
+            sat,passes = get_next_pass(MINIMUM_PASS_ANGLE)
+            # sat, passes = await wait_for_pass()
             if shared.running.value:
 
                 coroutines = [stream_decode_signal(sat, passes),
@@ -484,7 +484,7 @@ async def task_dispatcher() -> None:
                 os.rename('media/image.png', 'media/previous/' + str(gps.gps.time) + '.png')
 
 
-async def background_task_setup(app) -> None:
+async def background_task_setup(app: aiohttp.web_app.Application) -> None:
     """Run task_listener() and task_dispatcher()
 
     Runs task_listener() and task_dispatcher() asynchronously. As task_listener() controls the state of Running,
@@ -492,7 +492,6 @@ async def background_task_setup(app) -> None:
     :param app: The asyncio web server application. Required to attach to asyncio background tasks
     :return: None
     """
-    print(type(app))
     asyncio.create_task(task_listener())
     asyncio.create_task(task_dispatcher())
 
