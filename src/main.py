@@ -23,6 +23,7 @@ import imu
 
 MINIMUM_PASS_ANGLE = 30.0
 
+
 class WebInterface(Dispatcher):
     running_value = Property()
 
@@ -37,7 +38,6 @@ class WebInterface(Dispatcher):
         }
         self.running_value = False
         return aiohttp_jinja2.render_template('index.html', request, data)
-
 
     async def load_start_web_interface(self, request):
         """Loads the started web interface
@@ -470,14 +470,13 @@ async def task_dispatcher() -> None:
         if running_val:
             # Set running value in case this method is triggered first
             shared.running.value = True
-            sat,passes = get_next_pass(MINIMUM_PASS_ANGLE)
-            # sat, passes = await wait_for_pass()
+            # sat, passes = get_next_pass(MINIMUM_PASS_ANGLE)
+            sat, passes = await wait_for_pass()
             if shared.running.value:
-
                 coroutines = [stream_decode_signal(sat, passes),
-                        doppler_task_controller(sat, passes),
-                        motor_controller(sat, passes),
-                        imu.stream_readings(passes)]
+                              doppler_task_controller(sat, passes),
+                              motor_controller(sat, passes),
+                              imu.stream_readings(passes)]
                 await asyncio.gather(*coroutines, return_exceptions=True)
             print('Done')
             if os.path.exists('media/image.png'):
@@ -502,7 +501,7 @@ if __name__ == '__main__':
     imu, elevation_motor, azimuth_motor = read_in_config('deviceconfig.json')
     try:
         sdr = RtlSdr()
-        sdr.sample_rate = 1.04e6
+        sdr.sample_rate = 80000
         # APT overall bandwidth is 38.8 kHz per Carson bandwidth rule - 2 * (17 + 2.4)
         sdr.bandwidth = 38800
         sdr_error = 0

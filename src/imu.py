@@ -76,7 +76,7 @@ class IMU(object):
         """Returns the yaw"""
         return self._yaw
 
-    def __read_sensor_data(self, device_address: list, address: list[int, int]) -> int:
+    def __read_sensor_data(self, device_address: int, address: list[int, int]) -> int:
         """Read data from an address
 
         Read data from a device on the bus in 16 bit two's complement

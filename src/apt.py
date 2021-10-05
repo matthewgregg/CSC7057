@@ -3,7 +3,6 @@ import scipy.signal as signal
 from scipy.constants import physical_constants
 from scipy.optimize import curve_fit
 from PIL import Image
-from skyfield import sgp4lib
 from typing import Union
 
 
@@ -60,6 +59,11 @@ class APT(object):
         trunc = np.delete(data, 0)
         fm_demodulate = trunc.real * np.diff(data.imag) - trunc.imag * np.diff(data.real)
         del trunc
+        # Wrap phase
+        fm_demodulate = (fm_demodulate + np.pi) % (2 * np.pi) - np.pi
+        # Express phase as frequency (in fraction of Nyquist). If sample rate = 2 * bandwidth, frequency cancels
+        frequency_deviation = 38800
+        fm_demodulate /= np.pi * frequency_deviation * 2 / rate
 
         # Signal is now double sideband, full carrier amplitude modulated 2400 Hz subcarrier
         # From APT manual: "Two channels of AVHRR data are time-division multiplexed into an output data stream that has
