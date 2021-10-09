@@ -9,7 +9,7 @@ from skyfield.api import wgs84
 class GPS(object):
     """GPS object to store GPS data"""
     # Disables gps if not in open area, which would cause a loop until a fix is acquired
-    DEBUG_MODE = True
+    DEBUG_MODE = False
 
     def __init__(self):
         """Initialise GPS object with data from GPS receiver

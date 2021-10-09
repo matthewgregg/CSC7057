@@ -424,7 +424,9 @@ class IMU(object):
         :return: a 3x3 matrix and a 3x1 matrix
         """
 
-        input("Rotate the magnetometer smoothly in 3 dimensions, as if around a sphere")
+        print("Rotate the magnetometer smoothly in 3 dimensions, as if around a sphere")
+        time.sleep(3)
+        print("Starting")
 
         m_x = []
         m_y = []
@@ -435,6 +437,7 @@ class IMU(object):
             m_y.append(self.__read_sensor_data(self._mag_device_address, self._mag_address[1]))
             m_z.append(self.__read_sensor_data(self._mag_device_address, self._mag_address[2]))
 
+        print('Done')
         m_x = np.array(m_x)
         m_y = np.array(m_y)
         m_z = np.array(m_z)

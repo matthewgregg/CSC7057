@@ -8,6 +8,7 @@ import os.path
 from datetime import datetime as dt, timedelta, timezone
 import numpy as np
 from scipy import constants
+from scipy.io import wavfile
 from skyfield import sgp4lib, timelib as sftime
 from skyfield.api import load, wgs84
 from pydispatch import Dispatcher, Property
@@ -45,24 +46,32 @@ class WebInterface(Dispatcher):
         :param request: The HTTP request
         :return: The HTML template to be displayed
         """
-        data = await request.post()
-        shared.filter_type = data['filter-type']
+        post = await request.post()
+
         s, p = get_next_pass(MINIMUM_PASS_ANGLE)
         sat_name = s.name
         rise_time = dt.isoformat(p[0][0])
         set_time = dt.isoformat(p[2][0])
-        if sdr_error == 0:
-            self.running_value = True
-        data = {
-            'running': 1,
-            'satellite': sat_name,
-            'rise': rise_time,
-            'set': set_time,
-            'sdrerror': sdr_error
-        }
+
+        data = {'running': 1,
+                'satellite': sat_name,
+                'rise': rise_time,
+                'set': set_time,
+                'sdrerror': sdr_error,
+                'redirect': False}
+
+        try:
+            shared.filter_type = post['filter-type']
+        except KeyError:
+            self.running_value = False
+            data['redirect'] = True
+
         if shared.running.value and not shared.waiting.value:
             self.running_value = False
             data['redirect'] = True
+
+        if sdr_error == 0 and data['redirect'] is not True:
+            self.running_value = True
 
         return aiohttp_jinja2.render_template('index.html', request, data)
 
@@ -457,7 +466,7 @@ async def task_listener() -> None:
     """
     while True:
         (_, shared.running.value), _ = await running_event
-        print('Running value changed to ', shared.running.value)
+        print('Running value changed to', shared.running.value)
 
 
 async def task_dispatcher() -> None:
@@ -470,8 +479,8 @@ async def task_dispatcher() -> None:
         if running_val:
             # Set running value in case this method is triggered first
             shared.running.value = True
-            # sat, passes = get_next_pass(MINIMUM_PASS_ANGLE)
-            sat, passes = await wait_for_pass()
+            sat, passes = get_next_pass(MINIMUM_PASS_ANGLE)
+            # sat, passes = await wait_for_pass()
             if shared.running.value:
                 coroutines = [stream_decode_signal(sat, passes),
                               doppler_task_controller(sat, passes),
@@ -501,7 +510,7 @@ if __name__ == '__main__':
     imu, elevation_motor, azimuth_motor = read_in_config('deviceconfig.json')
     try:
         sdr = RtlSdr()
-        sdr.sample_rate = 80000
+        sdr.sample_rate = 1.04e6
         # APT overall bandwidth is 38.8 kHz per Carson bandwidth rule - 2 * (17 + 2.4)
         sdr.bandwidth = 38800
         sdr_error = 0

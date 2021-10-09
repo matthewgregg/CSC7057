@@ -34,6 +34,8 @@ class APT(object):
         self.channel = None
         self._cs = None
         self._black_body_temp = None
+        self._tele_similarity = None
+        self._last_cal_check = 0
 
         if apt_filter == 'precipitation':
             self.palette_data = np.array(Image.open('palettes/precipitation.png'))
@@ -54,16 +56,19 @@ class APT(object):
         :param rate: The sample rate of the data
         :param data: The data to be decoded
         """
+        # Drop samples to reduce to 80 kHz
+        ds_factor = 13
+        data = signal.decimate(data, ds_factor)
+        rate /= ds_factor
+
         # APT broadcasts at 2 lines per second at 2080 words per line (4160 baud)
-        # FM demodulation. Don't resample yet to allow for super sampling the FM signal
+        # Frequency demodulation
         trunc = np.delete(data, 0)
-        fm_demodulate = trunc.real * np.diff(data.imag) - trunc.imag * np.diff(data.real)
+        fm_demodulate = (trunc.real * np.diff(data.imag) - trunc.imag * np.diff(data.real)) / (
+                    trunc.real ** 2 + trunc.imag ** 2)
         del trunc
-        # Wrap phase
+        # Wrap phase in case of large angle changes (unlikely in FM)
         fm_demodulate = (fm_demodulate + np.pi) % (2 * np.pi) - np.pi
-        # Express phase as frequency (in fraction of Nyquist). If sample rate = 2 * bandwidth, frequency cancels
-        frequency_deviation = 38800
-        fm_demodulate /= np.pi * frequency_deviation * 2 / rate
 
         # Signal is now double sideband, full carrier amplitude modulated 2400 Hz subcarrier
         # From APT manual: "Two channels of AVHRR data are time-division multiplexed into an output data stream that has
@@ -179,12 +184,11 @@ class APT(object):
         image_matrix = np.array(image_matrix)
         if self._filter is not None:
             if self._filter == 'precipitation':
-                self.__apply_precipitation_filter(image_matrix)
+                self.__apply_precipitation_filter(np.array(image_matrix))
             elif self._filter == 'thermal':
-                self.__apply_thermal_filter(image_matrix)
+                self.__apply_thermal_filter(np.array(image_matrix))
             elif self._filter is not None:
-                self.__apply_filter(image_matrix)
-
+                self.__apply_filter(np.array(image_matrix))
 
     def __apply_filter(self, data: np.array) -> None:
         """Apply a false colour filter to the image
@@ -192,6 +196,7 @@ class APT(object):
         :param data: the decoded image
         :return: None
         """
+
         # Extract only images from raw transmission
         channel_a = data[:, self.SYNC + self.SPACE:self.SYNC + self.SPACE + self.IMAGE]
         channel_b = data[:, self.B_OFFSET:self.B_OFFSET + self.IMAGE]
@@ -202,7 +207,6 @@ class APT(object):
             image[y][x] = self.palette_data[channel_b[y][x]][channel_a[y][x]]
 
         self.filtered_image.extend(image.tolist())
-
 
     def __apply_precipitation_filter(self, data: np.array) -> None:
         """Apply precipitation filter
@@ -235,27 +239,22 @@ class APT(object):
         if len(self.image) < self.TELE_LENGTH:
             return
 
-        lines_since_last_cal = len(self.image) - self._tele_cal_index
+        if len(self.image) - self._last_cal_check > self.TELE_LENGTH:
+            self._last_cal_check = len(self.image)
+            self.__calibrate_with_tele_frame(np.array(self.image[:-1 * self.TELE_LENGTH]))
 
-        if lines_since_last_cal > self.TELE_LENGTH:
-            try:
-                self.__calibrate_with_tele_frame(self.image[:-1 * self.TELE_LENGTH])
-            except ValueError:
-                return
-
-        if self.channel < 4:
+        if self.channel is None or self.channel < 4:
             # Not an infrared image
             return
 
         # If this is the first run since start
         if len(self.filtered_image) == 0:
-            data = self.image
+            data = np.array(self.image)
 
         # Clip to infrared image
-        data = data[:, self.B_OFFSET-3 : self.B_OFFSET + self.IMAGE-5]
+        data = data[:, self.B_OFFSET - 3: self.B_OFFSET + self.IMAGE - 5]
 
         channel = self.channel - 4
-
         cal = self.__get_thermal_calibration()
 
         c1 = physical_constants["first radiation constant for spectral radiance"][0] * 1e11
@@ -297,7 +296,6 @@ class APT(object):
 
         self.filtered_image.extend(image.tolist())
 
-
     def export_image(self, filename: str) -> None:
         """Exports the matrix image to a file
 
@@ -309,7 +307,6 @@ class APT(object):
         else:
             Image.fromarray(np.array(self.filtered_image, dtype=np.uint8)).save(filename)
 
-
     def __fit_bias(self, data: Union[np.array, float], a: float, b: float) -> Union[np.array, float]:
         """Model function for least squares fitting
 
@@ -320,7 +317,6 @@ class APT(object):
         """
         return (a * data) + b
 
-
     def __calibrate_with_tele_frame(self, data: np.array) -> None:
         """Calibrate image using Telemetry frame
 
@@ -330,20 +326,20 @@ class APT(object):
         :return: None
         """
         if len(data) < self.TELE_LENGTH:
-            raise ValueError
+            return
 
         # Extract Telemetry frame and take horizontal mean
-        tele_b = data[:, self.B_OFFSET + self.IMAGE : self.B_OFFSET + self.IMAGE + 40]
+        tele_b = data[:, self.B_OFFSET + self.IMAGE: self.B_OFFSET + self.IMAGE + 40]
         tele_b = np.mean(tele_b, axis=1)
 
-        space_b = data[:, self.B_OFFSET - self.SPACE : self.B_OFFSET]
+        space_b = data[:, self.B_OFFSET - self.SPACE: self.B_OFFSET]
         space_b = np.mean(space_b, axis=1)
 
         max_diff = 0
         start = 0
         # Identify channel 9/10 of any telemetry frame by finding the largest white/black difference
-        for i in range(4, len(tele_b)-4):
-            similarity = sum(tele_b[i-4:i-1]) - sum(tele_b[i:i+4])
+        for i in range(4, len(tele_b) - 4):
+            similarity = sum(tele_b[i - 4:i - 1]) - sum(tele_b[i:i + 4])
             if similarity > max_diff:
                 start = i
                 max_diff = similarity
@@ -351,9 +347,9 @@ class APT(object):
         # Get first telemetry frame in image
         first = (start + (self.TELE_LENGTH // 2)) % self.TELE_LENGTH
 
-        # If a complete frame isn't available, raise exception
+        # If a complete frame isn't available, return
         if tele_b[first] + self.TELE_LENGTH > len(tele_b):
-            raise ValueError
+            return
 
         # Clip to start/end of telemetry and space frames, take mean vertically, then split into individual frames
         tele_b = tele_b[first:-1 * ((len(tele_b) - first) % self.TELE_LENGTH)]
@@ -366,8 +362,8 @@ class APT(object):
         # Wedges 1-8 are always the same and can be used to calibrate the image
         # Each wedge from 1-8 increases by 1/8 of max (255) followed by 0
         ideal_tele = []
-        wedge_increase = 255/8
-        for i in range(1, 8):
+        wedge_increase = 255 / 8
+        for i in range(1, 9):
             ideal_tele.append(i * wedge_increase)
         ideal_tele.append(0)
 
@@ -376,7 +372,7 @@ class APT(object):
         tele_b_match = []
         space_b_match = []
 
-        for i in range(tele_b):
+        for i in range(len(tele_b)):
             similarity = np.dot(tele_b[i][:9], ideal_tele)
             if similarity > max_diff:
                 max_diff = similarity
@@ -384,6 +380,12 @@ class APT(object):
                 tele_b_match = tele_b[i]
                 space_b_match = space_b[i]
 
+        if self._tele_similarity is None:
+            self._tele_similarity = max_diff
+        elif max_diff <= self._tele_similarity:
+            return
+
+        self._tele_similarity = max_diff
         self._tele_cal_index = match_index * self.TELE_LENGTH + first
 
         # Nonlinear regression to match telemetry frame to ideal
@@ -408,7 +410,7 @@ class APT(object):
         # Average space count (p 7-6)
         cs = 0
         count = 0
-        for i in range(space_b_match):
+        for i in range(len(space_b_match)):
             if space_b_match[i] > 50:
                 cs += space_b_match[i]
                 count += 1
@@ -419,7 +421,7 @@ class APT(object):
         # Wedges 10 to 15 encode AVHRR sensor calibration values
         temp = [0, 0, 0, 0]
         cal = self.__get_thermal_calibration()
-        for i in range(temp):
+        for i in range(len(temp)):
             c = self._telemetry[i + 9] * 4
             d0 = cal[0][i][0]
             d1 = cal[0][i][1]
@@ -434,55 +436,50 @@ class APT(object):
 
         self._black_body_temp = black_body
 
-
     def __get_thermal_calibration(self) -> list:
         """Get calibration values for AVHRR. From NOAA KLM User's Guide, page numbers in comments
 
         :return: Calibration values for the current satellite
         """
         if self._sat_name == 'NOAA 15 [B]':
-                # PRT coefficient d0, d1, d2 (Table D.1-8, pD-11 or 956)
+            # PRT coefficient d0, d1, d2 (Table D.1-8, pD-11 or 956)
             return [[[276.60157, 0.051045, 1.36328E-06],
-                    [276.62531, 0.050909, 1.47266E-06],
-                    [276.67413, 0.050907, 1.47656E-06],
-                    [276.59258, 0.050966, 1.47656E-06]],
-                # Channel radiance coefficient vc, A, B (Table D1-11, pD-18 or 963)
-                    [[925.4075, 0.337810, 0.998719], # Channel 4
-                    [839.8979, 0.304558, 0.999024], # Channel 5
-                    [2695.9743, 1.621256, 0.998015]], # Channel 3B
-                # Nonlinear radiance correction Ns, [b0, b1, b2] (Table D.1-14, pD-37 or 982)
-                    [[-4.50, [4.76, -0.0932, 0.0004524]], # Channel 4
-                    [-3.61, [3.83, -0.0659, 0.0002811]], # Channel 5
-                    [0.0, [0.0, 0.0, 0.0]]]] # Channel 3B
+                     [276.62531, 0.050909, 1.47266E-06],
+                     [276.67413, 0.050907, 1.47656E-06],
+                     [276.59258, 0.050966, 1.47656E-06]],
+                    # Channel radiance coefficient vc, A, B (Table D1-11, pD-18 or 963)
+                    [[925.4075, 0.337810, 0.998719],  # Channel 4
+                     [839.8979, 0.304558, 0.999024],  # Channel 5
+                     [2695.9743, 1.621256, 0.998015]],  # Channel 3B
+                    # Nonlinear radiance correction Ns, [b0, b1, b2] (Table D.1-14, pD-37 or 982)
+                    [[-4.50, [4.76, -0.0932, 0.0004524]],  # Channel 4
+                     [-3.61, [3.83, -0.0659, 0.0002811]],  # Channel 5
+                     [0.0, [0.0, 0.0, 0.0]]]]  # Channel 3B
         elif self._sat_name == 'NOAA 18 [B]':
-                # PRT coefficient d0, d1, d2
+            # PRT coefficient d0, d1, d2
             return [[[276.601, 0.05090, 1.657e-06],
-                    [276.683, 0.05101, 1.482e-06],
-                    [276.565, 0.05117, 1.313e-06],
-                    [276.615, 0.05103, 1.484e-06]],
-                 # Channel radiance coefficient vc, A, B
-                    [[928.1460, 0.436645, 0.998607], # Channel 4
-                    [833.2532, 0.253179, 0.999057], # Channel 5
-                    [2659.7952, 1.698704, 0.996960]], # Channel 3B
-                # Nonlinear radiance correction Ns, [b0, b1, b2]
-                    [[-5.53, [5.82, -0.11069, 0.00052337]], # Channel 4
-                    [-2.22, [2.67, -0.04360, 0.00017715]], # Channel 5
-                    [0.0, [0.0, 0.0, 0.0]]]] # Channel 3B
+                     [276.683, 0.05101, 1.482e-06],
+                     [276.565, 0.05117, 1.313e-06],
+                     [276.615, 0.05103, 1.484e-06]],
+                    # Channel radiance coefficient vc, A, B
+                    [[928.1460, 0.436645, 0.998607],  # Channel 4
+                     [833.2532, 0.253179, 0.999057],  # Channel 5
+                     [2659.7952, 1.698704, 0.996960]],  # Channel 3B
+                    # Nonlinear radiance correction Ns, [b0, b1, b2]
+                    [[-5.53, [5.82, -0.11069, 0.00052337]],  # Channel 4
+                     [-2.22, [2.67, -0.04360, 0.00017715]],  # Channel 5
+                     [0.0, [0.0, 0.0, 0.0]]]]  # Channel 3B
         elif self._sat_name == 'NOAA 19 [+]':
-                # PRT coefficient d0, d1, d2
+            # PRT coefficient d0, d1, d2
             return [[[276.6067, 0.051111, 1.405783E-06],
-                    [276.6119, 0.051090, 1.496037E-06],
-                    [276.6311, 0.051033, 1.496990E-06],
-                    [276.6268, 0.051058, 1.493110E-06]],
-                 # Channel radiance coefficient vc, A, B
-                    [[928.9, 0.53959, 0.998534], # Channel 4
-                    [831.9, 0.36064, 0.998913], # Channel 5
-                    [2670.0, 1.67396, 0.997364]], # Channel 3B
-                 # Nonlinear radiance correction Ns, [b0, b1, b2]
-                    [[-5.49, [5.70, -0.11187, 0.00054668]], # Channel 4
-                    [-3.39, [3.58, -0.05991, 0.00024985]], # Channel 5
-                    [0.0, [0.0, 0.0, 0.0]]]] # Channel 3B
-
-
-
-
+                     [276.6119, 0.051090, 1.496037E-06],
+                     [276.6311, 0.051033, 1.496990E-06],
+                     [276.6268, 0.051058, 1.493110E-06]],
+                    # Channel radiance coefficient vc, A, B
+                    [[928.9, 0.53959, 0.998534],  # Channel 4
+                     [831.9, 0.36064, 0.998913],  # Channel 5
+                     [2670.0, 1.67396, 0.997364]],  # Channel 3B
+                    # Nonlinear radiance correction Ns, [b0, b1, b2]
+                    [[-5.49, [5.70, -0.11187, 0.00054668]],  # Channel 4
+                     [-3.39, [3.58, -0.05991, 0.00024985]],  # Channel 5
+                     [0.0, [0.0, 0.0, 0.0]]]]  # Channel 3B
